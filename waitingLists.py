@@ -270,11 +270,11 @@ session_types = {
 }
 
 DEFAULT_COLORS = {
-    "P1": "#eab308",  # Yellow-500
-    "P2": "#22c55e",  # Green-500
-    "P3": "#f97316",  # Orange-500
-    "P4": "#ef4444",  # Red-500
-    "Total": "#3b82f6" # Blue-500
+    "P1": "#006858",  # HSE Green (Start)
+    "P2": "#A6D6D0",  # Pale Green
+    "P3": "#F472B6",  # Pink
+    "P4": "#831B46",  # HSE Wine
+    "Total": "#2563EB" # Blue-600
 }
 
 def map_waiting_days_to_category(waiting_days):
