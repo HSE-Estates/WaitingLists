@@ -3,27 +3,35 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
 import warnings
-from prophet import Prophet
-from streamlit_echarts import st_echarts
+from prophet import Prophet # Import Prophet
+from streamlit_echarts import st_echarts # Import ECharts component
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore") # Suppress pandas SettingWithCopyWarning etc.
 
-# --- Constants ---
+# --- Constants and Helper Functions (Shared) ---
 
+def format_time_duration(minutes):
+    """Convert minutes to hours and minutes format if over 60 minutes"""
+    if minutes == 0:
+        return "0 minutes"
+    elif minutes < 60:
+        return f"{minutes} minutes"
+    else:
+        hours = minutes // 60
+        remaining_minutes = minutes % 60
+        if remaining_minutes == 0:
+            return f"{hours} hours"
+        else:
+            return f"{hours} hours {remaining_minutes} minutes"
+
+# Constants for time calculations
 WORK_DAY_MINUTES = 480  # 8-hour workday
 WORK_DAYS_PER_WEEK = 5
 
-DEFAULT_COLORS = {
-    "P1": "#FFFF00",  # Yellow
-    "P2": "#00FF00",  # Green
-    "P3": "#FFA500",  # Orange
-    "P4": "#FF0000",  # Red
-    "Total": "#0000FF" # Blue
-}
-
-SESSION_TYPES = {
+# Session configurations
+session_types = {
     "60 min": {
         "sessions_per_day": WORK_DAY_MINUTES // 60,
         "duration": 60,
@@ -41,562 +49,933 @@ SESSION_TYPES = {
     }
 }
 
-# --- Helper Functions (Utilities) ---
+# Define a default color map for categories
+DEFAULT_COLORS = {
+    "P1": "#FFFF00",  # Yellow
+    "P2": "#00FF00",  # Green
+    "P3": "#FFA500",  # Orange
+    "P4": "#FF0000",  # Red
+    "Total": "#0000FF" # Blue
+}
 
-def format_time_duration(minutes):
-    """Convert minutes to human-readable string."""
-    if minutes == 0:
-        return "0 minutes"
-    elif minutes < 60:
-        return f"{minutes} minutes"
-    else:
-        hours = minutes // 60
-        mins = minutes % 60
-        return f"{hours} hours" if mins == 0 else f"{hours} hours {mins} minutes"
-
+# Function to map waiting days to time categories for Sankey display
 def map_waiting_days_to_category(waiting_days):
     """Maps waiting days to a time-based category for Sankey display."""
     if pd.isna(waiting_days):
         return "Unknown"
-    if waiting_days > 450: return "Over 15 months"
-    elif waiting_days > 365: return "Over 12 months"
-    elif waiting_days > 180: return "Over 6 months"
-    elif waiting_days > 90: return "Over 3 months"
-    else: return "Under 3 months"
+    if waiting_days > 450: # 15 months * 30 days/month approx
+        return "Over 15 months"
+    elif waiting_days > 365: # 12 months
+        return "Over 12 months"
+    elif waiting_days > 180: # 6 months
+        return "Over 6 months"
+    elif waiting_days > 90: # 3 months
+        return "Over 3 months"
+    else:
+        return "Under 3 months" # New category for those under 3 months
 
+# --- NEW: Function to calculate WPS components ---
 def calculate_wps_components(df, custom_priority_weights):
     """
-    Calculates and adds WPS-related columns. 
-    Crucially, this returns a NEW dataframe and does not mutate in place.
+    Calculates and adds WPS-related columns (Waiting_Days, Priority_Score) to the DataFrame.
     """
-    if df is None or df.empty:
-        return df
-        
-    df_copy = df.copy()
-    
-    # Ensure Date is datetime
+    df_copy = df.copy() # Work on a copy to avoid modifying original df directly in place
+
+    # Ensure 'Date' column is datetime
     df_copy['Date'] = pd.to_datetime(df_copy['Date'], dayfirst=True, errors='coerce')
-    
-    # Calculate waiting time
+
+    # Calculate waiting time in days
     today = datetime.today()
     df_copy['Waiting_Days'] = (today - df_copy['Date']).dt.days
-    
-    # Calculate Priority Score based on category mapping
+
+    # Calculate Priority_Score
     df_copy['Priority_Score'] = df_copy['Category'].map(custom_priority_weights).fillna(0)
-    
+
     return df_copy
 
-# --- Simulation Helper Functions (Refactored) ---
+# --- Functions for Waiting List Optimisation Page ---
+
+def show_referral_charts(df, available_categories, category_colors):
+    """
+    Displays referral breakdown charts, dynamically adjusting for available categories.
+    Now includes a Sankey diagram.
+    """
+    if "Category" not in df.columns:
+        st.warning("The uploaded file must contain 'Category' column to show referral charts.")
+        return
+
+    st.subheader("📊 Referral Breakdown")
+    
+    # Calculate referral counts
+    referral_counts = df.groupby(["Referral_From", "Category"]).size().reset_index(name="Count")
+    
+    # Calculate total referrals per referrer
+    total_referrals = referral_counts.groupby("Referral_From")["Count"].sum().reset_index()
+    
+    # Layout for sorting & filtering controls
+    col_sort, col_filter = st.columns([1, 1])
+
+    with col_sort:
+        # Dynamically create category filter options
+        filter_options = ["All"] + sorted(available_categories)
+        category_filter = st.selectbox("Filter by category:", filter_options, key="referral_category_filter")
+
+    with col_filter:
+        min_referrals = st.slider("Show referrers with more than X referrals:", 
+                                  min_value=0, 
+                                  max_value=int(total_referrals["Count"].max()), 
+                                  value=3,
+                                  key="referral_min_referrals")
+    
+    # Apply category filter
+    if category_filter != "All":
+        referral_counts = referral_counts[referral_counts["Category"] == category_filter]
+
+    # Apply referral count filter
+    referrers_filtered = total_referrals[total_referrals["Count"].fillna(0) > min_referrals]["Referral_From"]
+    filtered_referral_counts = referral_counts[referral_counts["Referral_From"].isin(referrers_filtered)].copy()
+
+    # Sort referrers by total referrals descending
+    sorted_referrers = total_referrals.sort_values(by="Count", ascending=False)["Referral_From"]
+    
+    filtered_referral_counts["Referral_From"] = pd.Categorical(filtered_referral_counts["Referral_From"], categories=sorted_referrers, ordered=True)
+    filtered_referral_counts = filtered_referral_counts.sort_values("Referral_From")
+
+    # Plot charts
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig_bar = px.bar(filtered_referral_counts, x="Referral_From", y="Count", color="Category",
+                         title="Referrals per Referrer by Category",
+                         labels={"Count": "Number of Referrals"},
+                         barmode="stack",
+                         opacity=0.6,
+                         color_discrete_map=category_colors)
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    with col2:
+        fig_sunburst = px.sunburst(filtered_referral_counts, path=["Referral_From", "Category"], values="Count",
+                                   title="Referral Breakdown by Category and Referrer",
+                                   color="Category",
+                                   color_discrete_map=category_colors)
+        st.plotly_chart(fig_sunburst, use_container_width=True)
+
+    # Sankey Diagram (ECharts version)
+    st.subheader("Flow of Patients: Referral → Category → Wait Time (Interactive)")
+    
+    df_sankey = df.copy() # Create a copy for Sankey specific processing
+
+    # Apply the mapping for Sankey display
+    df_sankey['Wait_Time_Category_Sankey'] = df_sankey['Waiting_Days'].apply(map_waiting_days_to_category)
+
+    if "Referral_From" in df_sankey.columns and "Category" in df_sankey.columns and "Wait_Time_Category_Sankey" in df_sankey.columns:
+        # Aggregate data for Sankey
+        agg_df = df_sankey.groupby(['Referral_From', 'Category', 'Wait_Time_Category_Sankey']).size().reset_index(name='Count')
+
+        # Define nodes - sorted alphabetically for consistency in ECharts
+        all_nodes = sorted(list(pd.concat([agg_df['Referral_From'], agg_df['Category'], agg_df['Wait_Time_Category_Sankey']]).unique()))
+        echarts_nodes = [{"name": node} for node in all_nodes]
+
+        # Build ECharts links using node NAMES (strings)
+        echarts_links = []
+        for _, row in agg_df.iterrows():
+            # Link from Referral_From to Category
+            echarts_links.append({
+                "source": str(row['Referral_From']), # Ensure string
+                "target": str(row['Category']),     # Ensure string
+                "value": row['Count']
+            })
+            # Link from Category to Wait_Time_Category_Sankey
+            echarts_links.append({
+                "source": str(row['Category']),     # Ensure string
+                "target": str(row['Wait_Time_Category_Sankey']), # Use the new time category
+                "value": row['Count']
+            })
+
+        option = {
+            "tooltip": {
+                "trigger": "item",
+                "triggerOn": "mousemove"
+            },
+            "series": [
+                {
+                    "type": "sankey",
+                    "layout": "none",
+                    "data": echarts_nodes,
+                    "links": echarts_links,
+                    "focusNodeAdjacency": "allEdges",
+                    "itemStyle": {
+                        "borderWidth": 1,
+                        "borderColor": "#aaa"
+                    },
+                    "lineStyle": {
+                        "color": "gradient",
+                        "curveness": 0.5
+                    },
+                    "label": {
+                        "position": "right"
+                    }
+                }
+            ]
+        }
+        st_echarts(option, height="600px")
+    else:
+        st.warning("Required columns for Sankey diagram (Referral_From, Category, and 'Date' for wait time calculation) are missing or could not be generated.")
+
 
 def calculate_extra_sessions(session_type, num_therapists, num_weeks):
-    """Calculates potential extra capacity gained by shortening sessions."""
-    standard = SESSION_TYPES["60 min"]["duration"]
-    new_dur = SESSION_TYPES[session_type]["duration"]
-    
-    if new_dur >= standard:
-        return 0, 0, 0
-
-    # Capacity calculation
-    std_sessions_daily = WORK_DAY_MINUTES // standard
-    new_sessions_daily = WORK_DAY_MINUTES // new_dur
-    
-    extra_per_day = (new_sessions_daily - std_sessions_daily) * num_therapists
-    extra_per_week = extra_per_day * WORK_DAYS_PER_WEEK
-    total_extra = extra_per_week * num_weeks
-    
-    return total_extra, extra_per_day / num_therapists, extra_per_week
-
-def calculate_allocation_shares(strategy, available_categories, week_number, custom_priority_weights, median_wait_days, wps_factors):
     """
-    Determines how the total weekly capacity should be split among categories 
-    based on the selected strategy. Returns a dictionary of percentages (0.0 to 1.0).
+    Calculates extra sessions based on session length reduction.
+    This function is specifically for P3/P4 if they exist, otherwise it returns 0.
     """
-    allocation = {cat: 0.0 for cat in available_categories}
+    standard_duration = session_types["60 min"]["duration"]
+    new_duration = session_types[session_type]["duration"]
     
-    # Strategy 1: P3/P4 Blitz (1 in 4 weeks)
-    if strategy == "1 in 4 weeks for P3/P4":
-        is_p3p4_week = (week_number % 4 == 0)
-        has_p3p4 = "P3" in available_categories or "P4" in available_categories
-        
-        if has_p3p4 and is_p3p4_week:
-            # Give everything to P3/P4
-            sub_cats = [c for c in ["P3", "P4"] if c in available_categories]
-            for c in sub_cats:
-                allocation[c] = 1.0 / len(sub_cats)
-        else:
-            # Give everything to P1/P2
-            sub_cats = [c for c in ["P1", "P2"] if c in available_categories]
-            # If no P1/P2 exist, fall back to P3/P4 even in non-blitz weeks
-            if not sub_cats:
-                sub_cats = [c for c in ["P3", "P4"] if c in available_categories]
-            
-            if sub_cats:
-                for c in sub_cats:
-                    allocation[c] = 1.0 / len(sub_cats)
+    # Only calculate extra sessions if the session duration is actually shorter
+    if new_duration >= standard_duration:
+        return 0, 0, 0 # No extra sessions if duration is not reduced
 
-    # Strategy 2: Fixed Priority Split
-    elif strategy == "Priority Split":
-        high = [c for c in available_categories if c in ["P1", "P2"]]
-        low = [c for c in available_categories if c in ["P3", "P4"]]
-        
-        # Default split: 50% high, 50% low
-        share_high = 0.5 if low else 1.0
-        share_low = 0.5 if high else 1.0
-        
-        if not high and not low: return allocation # Empty
-        
-        if high:
-            for c in high: allocation[c] = share_high / len(high)
-        if low:
-            for c in low: allocation[c] = share_low / len(low)
-
-    # Strategy 3: Urgency-Weighted (WPS based)
-    else: 
-        scores = {}
-        for cat in available_categories:
-            p_score = custom_priority_weights.get(cat, 0)
-            # Use Median to avoid outliers skewing the allocation
-            w_days = median_wait_days.get(cat, 0)
-            
-            # WPS Formula for category level
-            score = (p_score * wps_factors['priority']) + ((w_days / 5) * wps_factors['wait_time'])
-            scores[cat] = score
-            
-        total_score = sum(scores.values())
-        if total_score > 0:
-            for cat in available_categories:
-                allocation[cat] = scores[cat] / total_score
-        else:
-            # Equal distribution fallback
-            for cat in available_categories:
-                allocation[cat] = 1.0 / len(available_categories)
-                
-    return allocation
-
-def apply_capacity_constraints(proposed_reductions, total_weekly_capacity):
-    """
-    Ensures we don't treat more patients than we have slots for.
-    If demand > capacity, scale down all treatments proportionally.
-    """
-    total_proposed = sum(proposed_reductions.values())
+    workday_standard_sessions = WORK_DAY_MINUTES // standard_duration
+    workday_new_sessions = WORK_DAY_MINUTES // new_duration
     
-    if total_proposed <= total_weekly_capacity:
-        return proposed_reductions
+    extra_sessions_per_day = workday_new_sessions - workday_standard_sessions
+    extra_sessions_per_week = extra_sessions_per_day * WORK_DAYS_PER_WEEK * num_therapists
+    total_extra_sessions = extra_sessions_per_week * num_weeks
     
-    # Scale down
-    scale_factor = total_weekly_capacity / total_proposed
-    return {cat: val * scale_factor for cat, val in proposed_reductions.items()}
+    return total_extra_sessions, extra_sessions_per_day, extra_sessions_per_week
 
-def simulate_backlog_reduction(
-    session_key, strategy, num_therapists, sessions_per_therapist_per_week,
-    forecasts, num_weeks, backlog_initial, avg_sessions_per_category,
-    avg_weeks_between_sessions, available_categories, custom_priority_weights,
-    median_wait_days, wps_factors
-):
+def simulate_backlog_reduction(session_key, strategy, num_therapists, sessions_per_therapist_per_week, forecasted_new_referrals_per_week, num_weeks, backlog_initial, avg_sessions_per_category, avg_weeks_between_sessions, available_categories, custom_priority_weights, avg_waiting_days_per_category, priority_weight_factor_norm, wait_time_weight_factor_norm):
     """
-    Core simulation engine.
+    Simulate backlog reduction based on session configurations and strategies with follow-up sessions,
+    dynamically adjusting for available categories.
+    `forecasted_new_referrals_per_week` is now a dictionary of DataFrames,
+    where each DataFrame contains 'ds' and 'yhat' for a category's forecast.
+    `custom_priority_weights` is a dictionary of weights for P1, P2, P3, P4.
+    New parameters added for Urgency-Weighted Scheduling to incorporate all WPS factors.
     """
+    if num_therapists <= 0:
+        raise ValueError("Number of therapists must be greater than 0")
+    if sessions_per_therapist_per_week <= 0:
+        raise ValueError("Sessions per therapist must be greater than 0")
+
     weeks = np.arange(1, num_weeks + 1)
-    
-    # State tracking
-    backlog_history = {cat: [backlog_initial.get(cat, 0)] for cat in available_categories}
-    patients_seen_history = {cat: [] for cat in available_categories}
-    
-    # Calculate global capacity
-    base_weekly_capacity = sessions_per_therapist_per_week * num_therapists
-    
-    # Extra capacity from short sessions (only applies if strategy/categories align, simplified here to general pool)
-    # Note: In the original logic, extra sessions were only for P3/P4. We will maintain that logic.
-    _, _, extra_sessions_weekly_total = calculate_extra_sessions(session_key, num_therapists, num_weeks)
-    
-    for i in range(len(weeks)):
-        week_num = i + 1
-        current_allocations = calculate_allocation_shares(
-            strategy, available_categories, week_num, custom_priority_weights, 
-            median_wait_days, wps_factors
-        )
-        
-        proposed_treatments = {}
-        
-        # 1. Determine demand/proposed treatments based on allocation shares
-        for cat in available_categories:
-            share = current_allocations.get(cat, 0)
-            
-            # Base capacity share
-            cat_capacity = base_weekly_capacity * share
-            
-            # Add extra capacity for P3/P4 if applicable
-            if cat in ["P3", "P4"] and extra_sessions_weekly_total > 0:
-                # Logic: Is this a week where P3/P4 get the extra slots?
-                # Simplified: If they have allocation > 0, they get their share of extra slots
-                if share > 0:
-                    cat_capacity += (extra_sessions_weekly_total * share)
-            
-            proposed_treatments[cat] = cat_capacity
+    backlog_projection = {category: np.zeros(len(weeks)) for category in available_categories}
+    patients_seen_per_week = {category: np.zeros(len(weeks)) for category in available_categories} 
 
-        # 2. Enforce conservation of capacity (Fix #3)
-        # We calculate total capacity available this week for safety
-        this_week_total_capacity = base_weekly_capacity + (extra_sessions_weekly_total if any(c in ["P3", "P4"] for c in available_categories) else 0)
-        actual_treatments = apply_capacity_constraints(proposed_treatments, this_week_total_capacity)
-        
-        # 3. Process each category
-        for cat in available_categories:
-            # Get forecasted new referrals
-            # Fix #2: Alignment. forecasts[cat] is a dataframe. We need the specific future week.
-            # The forecast df passed here should already be sliced or aligned. 
-            # We assume forecasts[cat] is a dataframe where row 'i' corresponds to simulation week 'i'
-            new_referrals = 0
-            if cat in forecasts and i < len(forecasts[cat]):
-                 new_referrals = max(0, forecasts[cat].iloc[i]['yhat'])
-            
-            # Backlog Logic
-            prev_backlog = backlog_history[cat][-1]
-            treated = actual_treatments.get(cat, 0)
-            
-            # Fix #5: Follow-up logic approximation
-            # Instead of instantaneous demand, we assume a % of current active list generates returns.
-            # Or use the simplified heuristic: (new_referrals * (avg_sessions - 1)) distributed?
-            # Sticking to the critique's suggestion: "Approximate follow-ups as % of current backlog" is hard without knowing churn.
-            # We will use a dampened version of the original to avoid massive spikes, but respecting the user's original intent regarding "avg_weeks_between".
-            
-            follow_ups = 0
-            avg_weeks = avg_weeks_between_sessions.get(cat, 1)
-            avg_sess = avg_sessions_per_category.get(cat, 1)
-            
-            # Original logic logic refined:
-            # If week matches the cycle, we add follow-up demand.
-            if avg_weeks > 0 and week_num % avg_weeks == 0:
-                # Based on RECENT patients seen, not just new referrals. 
-                # Approximating active caseload as backlog size * small factor?
-                # Let's stick closer to original but ensure it doesn't violate capacity.
-                # Actually, follow-ups are ADDED to the backlog (appointments needed).
-                follow_ups = new_referrals * (avg_sess - 1)
-            
-            # Balance equation: New Backlog = Old + Inflow (New + Returns) - Outflow (Treated)
-            new_backlog_val = prev_backlog + new_referrals + follow_ups - treated
-            
-            backlog_history[cat].append(max(0, new_backlog_val))
-            patients_seen_history[cat].append(treated)
+    # Calculate extra sessions, only relevant if P3/P4 exist and strategy uses them
+    total_extra_sessions, extra_sessions_per_day, extra_sessions_per_week = calculate_extra_sessions(session_key, num_therapists, num_weeks)
 
-    # Remove initial state for plotting (keep only weeks 1..N)
-    for cat in available_categories:
-        backlog_history[cat].pop(0)
-        
-    return weeks, backlog_history, patients_seen_history
+    # Set initial backlog
+    for category in available_categories:
+        backlog_projection[category][0] = backlog_initial.get(category, 0) # Use .get with default 0 for safety
 
-# --- Forecasting Wrapper ---
+    for i in range(1, len(weeks)):
+        week_number = i + 1
+        # Initialise allocation for all available categories to 0
+        allocation = {cat: 0 for cat in available_categories}
 
-@st.cache_data
-def get_prophet_forecast(df, num_weeks, categories):
-    """
-    Generates forecasts. Fixes index mismatch by returning ONLY future rows.
-    """
-    results = {}
-    
-    # Aggregate weekly first
-    df_agg = df.copy()
-    df_agg['WeekStart'] = df_agg['Date'].dt.to_period('W').dt.start_time
-    weekly = df_agg.groupby(['WeekStart', 'Category']).size().reset_index(name='y')
-    weekly.rename(columns={'WeekStart': 'ds'}, inplace=True)
-    
-    last_date = df['Date'].max()
-    
-    for cat in categories:
-        cat_data = weekly[weekly['Category'] == cat].copy()
+        is_p3p4_week = (strategy == "1 in 4 weeks for P3/P4" and week_number % 4 == 0)
         
-        if len(cat_data) < 2:
-            # Fallback: Average
-            mean_val = cat_data['y'].mean() if not cat_data.empty else 0
-            dates = pd.date_range(start=last_date, periods=num_weeks + 1, freq='W')[1:] # Next week onwards
-            results[cat] = pd.DataFrame({'ds': dates, 'yhat': [mean_val] * num_weeks})
-            continue
-            
-        try:
-            m = Prophet(weekly_seasonality=True, daily_seasonality=False)
-            m.fit(cat_data)
-            
-            # Make future dataframe. We need to be careful to extend from the last actual date.
-            future = m.make_future_dataframe(periods=num_weeks, freq='W')
-            forecast = m.predict(future)
-            
-            # Fix #2: Filter only future dates
-            future_forecast = forecast[forecast['ds'] > last_date].copy()
-            
-            # Ensure we have exactly num_weeks
-            if len(future_forecast) > num_weeks:
-                future_forecast = future_forecast.head(num_weeks)
-            
-            future_forecast['yhat'] = future_forecast['yhat'].apply(lambda x: max(0, x))
-            results[cat] = future_forecast.reset_index(drop=True)
-            
-        except Exception:
-            # Fallback on error
-            mean_val = cat_data['y'].mean()
-            dates = pd.date_range(start=last_date, periods=num_weeks + 1, freq='W')[1:]
-            results[cat] = pd.DataFrame({'ds': dates, 'yhat': [mean_val] * num_weeks})
-            
-    return results
+        # Determine current week's allocation based on strategy and available categories
+        if strategy == "1 in 4 weeks for P3/P4":
+            if "P3" in available_categories or "P4" in available_categories:
+                if is_p3p4_week:
+                    if "P3" in available_categories: allocation["P3"] = 0.5 if "P4" in available_categories else 1.0
+                    if "P4" in available_categories: allocation["P4"] = 0.5 if "P3" in available_categories else 1.0
+                else:
+                    if "P1" in available_categories: allocation["P1"] = 0.5 if "P2" in available_categories else 1.0
+                    if "P2" in available_categories: allocation["P2"] = 0.5 if "P1" in available_categories else 1.0
+            else: # If no P3/P4, distribute among P1/P2
+                if "P1" in available_categories: allocation["P1"] = 0.5 if "P2" in available_categories else 1.0
+                if "P2" in available_categories: allocation["P2"] = 0.5 if "P1" in available_categories else 1.0
+        elif strategy == "Priority Split":
+            high_priority_cats = [cat for cat in available_categories if cat in ["P1", "P2"]]
+            low_priority_cats = [cat for cat in available_categories if cat in ["P3", "P4"]]
 
-# --- Charts ---
+            # Initialise all allocations to 0.0
+            for cat in available_categories:
+                allocation[cat] = 0.0
 
-def show_referral_charts(df, available_categories, colors):
-    st.subheader("📊 Referral Analysis")
-    
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        cat_filter = st.selectbox("Filter Category:", ["All"] + available_categories)
-    with col2:
-        min_refs = st.slider("Min Referrals to Show:", 0, 50, 3)
-        
-    data = df.copy()
-    if cat_filter != "All":
-        data = data[data['Category'] == cat_filter]
-        
-    counts = data.groupby(['Referral_From', 'Category']).size().reset_index(name='Count')
-    total_per_ref = counts.groupby('Referral_From')['Count'].sum()
-    valid_refs = total_per_ref[total_per_ref > min_refs].index
-    
-    filtered = counts[counts['Referral_From'].isin(valid_refs)]
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        fig = px.bar(filtered, x='Referral_From', y='Count', color='Category', 
-                     color_discrete_map=colors, title="Referrals by Source")
-        st.plotly_chart(fig, use_container_width=True)
-        
-    with c2:
-        fig = px.sunburst(filtered, path=['Referral_From', 'Category'], values='Count',
-                          color='Category', color_discrete_map=colors, title="Referral Distribution")
-        st.plotly_chart(fig, use_container_width=True)
-        
-    # Sankey
-    st.subheader("Patient Flow: Source → Category → Wait Duration")
-    sankey_df = data.copy()
-    sankey_df['Wait_Group'] = sankey_df['Waiting_Days'].apply(map_waiting_days_to_category)
-    
-    agg = sankey_df.groupby(['Referral_From', 'Category', 'Wait_Group']).size().reset_index(name='val')
-    
-    # Nodes
-    nodes = set(agg['Referral_From']) | set(agg['Category']) | set(agg['Wait_Group'])
-    nodes_list = [{"name": n} for n in sorted(list(nodes))]
-    
-    links = []
-    for _, row in agg.iterrows():
-        links.append({"source": str(row['Referral_From']), "target": str(row['Category']), "value": row['val']})
-        links.append({"source": str(row['Category']), "target": str(row['Wait_Group']), "value": row['val']})
-        
-    opt = {
-        "tooltip": {"trigger": "item"},
-        "series": [{
-            "type": "sankey",
-            "layout": "none",
-            "data": nodes_list,
-            "links": links,
-            "emphasis": {"focus": "adjacency"},
-            "lineStyle": {"color": "gradient", "curveness": 0.5}
-        }]
+            # Special case: Only P1 and P2 are present
+            if not low_priority_cats and "P1" in high_priority_cats and "P2" in high_priority_cats:
+                allocation["P1"] = 0.3
+                allocation["P2"] = 0.7
+            elif not low_priority_cats and "P1" in high_priority_cats: # Only P1
+                allocation["P1"] = 1.0
+            elif not low_priority_cats and "P2" in high_priority_cats: # Only P2
+                allocation["P2"] = 1.0
+            else:
+                # General case: split 50% for high priority, 50% for low priority
+                target_high_share = 0.5
+                target_low_share = 0.5
+
+                # Adjust shares if only one group of categories is present
+                if not low_priority_cats and high_priority_cats:
+                    target_high_share = 1.0
+                    target_low_share = 0.0
+                elif not high_priority_cats and low_priority_cats:
+                    target_high_share = 0.0
+                    target_low_share = 1.0
+
+                # Distribute shares among categories within their groups
+                if high_priority_cats and target_high_share > 0:
+                    split_per_high_cat = target_high_share / len(high_priority_cats)
+                    for cat in high_priority_cats:
+                        allocation[cat] = split_per_high_cat
+                
+                if low_priority_cats and target_low_share > 0:
+                    split_per_low_cat = target_low_share / len(low_priority_cats)
+                    for cat in low_priority_cats:
+                        allocation[cat] = split_per_low_cat
+
+        else:  # Urgency-Weighted - now incorporates all WPS components for category allocation
+            current_category_wps_scores = {}
+            for cat in available_categories:
+                # Get the base priority weight for the category
+                priority_score = custom_priority_weights.get(cat, 0)
+                # Get the average waiting days for the category
+                avg_wait_days = avg_waiting_days_per_category.get(cat, 0)
+
+                # Calculate a "category WPS" for allocation, using normalised weight factors
+                category_wps = (
+                    priority_score * priority_weight_factor_norm
+                    + (avg_wait_days / 5) * wait_time_weight_factor_norm # Scaled by 5
+                )
+                current_category_wps_scores[cat] = category_wps
+
+            total_category_wps_score = sum(current_category_wps_scores.values())
+            
+            if total_category_wps_score > 0:
+                for cat in available_categories:
+                    allocation[cat] = current_category_wps_scores[cat] / total_category_wps_score
+            else:
+                # Fallback if no weights are defined or all are zero
+                for cat in available_categories:
+                    allocation[cat] = 1.0 / len(available_categories) if len(available_categories) > 0 else 0
+
+
+        for category in available_categories:
+            # Get the forecasted new referrals for the current week
+            # We need to map the simulation week (1-indexed) to the forecast index (0-indexed)
+            # Ensure we don't go out of bounds for the forecast
+            if category in forecasted_new_referrals_per_week and i < len(forecasted_new_referrals_per_week[category]):
+                new_referrals = max(0, forecasted_new_referrals_per_week[category].iloc[i]['yhat']) # Use yhat from Prophet forecast
+            else:
+                new_referrals = 0 # Default to 0 if no forecast available for this week/category
+
+            base_weekly_sessions = sessions_per_therapist_per_week * num_therapists
+            base_reduction = base_weekly_sessions * allocation.get(category, 0) # Use .get for safety
+
+            extra_reduction = 0
+            # Apply extra reduction only if P3/P4 exist and conditions are met
+            if extra_sessions_per_week > 0 and category in ["P3", "P4"] and category in available_categories:
+                if (is_p3p4_week and strategy == "1 in 4 weeks for P3/P4") or (strategy != "1 in 4 weeks for P3/P4"):
+                    extra_reduction = extra_sessions_per_week * allocation.get(category, 0)
+
+            total_reduction = base_reduction + extra_reduction
+
+            # Ensure avg_sessions and avg_weeks_between are available for the category
+            avg_sessions = avg_sessions_per_category.get(category, 1) # Default to 1 session
+            avg_weeks_between = avg_weeks_between_sessions.get(category, 1) # Default to 1 week
+
+            follow_up_sessions = 0
+            if avg_weeks_between > 0 and week_number % avg_weeks_between == 0:
+                follow_up_sessions = new_referrals * (avg_sessions - 1)
+
+            current_backlog = backlog_projection[category][i-1]
+            
+            # Special handling for "1 in 4 weeks for P3/P4" strategy for P1/P2 categories
+            if category in ['P1', 'P2'] and ("P3" in available_categories or "P4" in available_categories):
+                if is_p3p4_week and strategy == "1 in 4 weeks for P3/P4":
+                    # P1/P2 don't get sessions in P3/P4 weeks under this strategy
+                    new_backlog = current_backlog + new_referrals + follow_up_sessions
+                    patients_seen_per_week[category][i] = 0 # No patients seen for P1/P2 in this week
+                else:
+                    new_backlog = current_backlog + new_referrals - total_reduction + follow_up_sessions
+                    patients_seen_per_week[category][i] = total_reduction
+            else:
+                new_backlog = current_backlog + new_referrals - total_reduction + follow_up_sessions
+                patients_seen_per_week[category][i] = total_reduction
+
+            backlog_projection[category][i] = max(np.floor(new_backlog), 0)
+
+    return weeks, backlog_projection, patients_seen_per_week
+
+# --- Streamlit Application Layout ---
+
+st.set_page_config(
+    page_title="Waiting List",
+    layout="wide",
+    page_icon="https://www.ehealthireland.ie/media/k1app1wt/hse-logo-black-png.png"
+)
+
+# Initialize all session state variables at the very beginning
+if "password_verified" not in st.session_state:
+    st.session_state.password_verified = False
+if "df" not in st.session_state:
+    st.session_state.df = None
+if "available_categories" not in st.session_state:
+    st.session_state.available_categories = []
+if "category_colors" not in st.session_state:
+    st.session_state.category_colors = {}
+if "file_uploaded" not in st.session_state:
+    st.session_state.file_uploaded = False
+if "priority_weight_factor" not in st.session_state:
+    st.session_state.priority_weight_factor = 1.0
+if "wait_time_weight_factor" not in st.session_state:
+    st.session_state.wait_time_weight_factor = 0.3
+if "custom_priority_weights" not in st.session_state:
+    st.session_state.custom_priority_weights = {
+        'P1': 100,
+        'P2': 75,
+        'P3': 50,
+        'P4': 25
     }
-    st_echarts(opt, height="500px")
 
-# --- Main App Logic ---
-
-st.set_page_config(page_title="Waiting List Optimisation", layout="wide", page_icon="🏥")
-
-# Init Session State
-defaults = {
-    "password_verified": False,
-    "raw_df": None,         # Fix #1: Store raw data separately
-    "processed_df": None,   # Store processed data
-    "custom_weights": {'P1': 100, 'P2': 75, 'P3': 50, 'P4': 25},
-    "wps_priority_factor": 1.0,
-    "wps_time_factor": 0.3
-}
-
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
-# Auth
 if not st.session_state.password_verified:
-    pwd = st.text_input("Enter Password:", type="password")
-    if st.button("Login"):
-        try:
-            # Check secrets first, fallback to hardcoded for demo purposes if needed
-            real_pwd = st.secrets.get("password", "admin") 
-            if pwd == real_pwd:
-                st.session_state.password_verified = True
-                st.rerun()
-            else:
-                st.error("Incorrect password")
-        except:
-             # Fallback if secrets not configured
-             if pwd == "admin":
-                 st.session_state.password_verified = True
-                 st.rerun()
-             else:
-                 st.error("Incorrect password (try 'admin' if local)")
-    st.stop()
+    try:
+        password = st.secrets["password"]
+    except KeyError:
+        st.error("Password not found in Streamlit secrets. Please set it up in .streamlit/secrets.toml.")
+        st.stop()
 
-# Sidebar
-with st.sidebar:
-    st.title("🏥 Settings")
+    user_password = st.text_input("Enter password to access the app:", type="password", key="password_input")
+    submit_button = st.button("Submit")
+
+    if submit_button:
+        if user_password == password:
+            st.session_state.password_verified = True
+            st.rerun()
+        else:
+            st.warning("Incorrect password. Please try again.")
+else:
+    st.sidebar.image("https://www.ehealthireland.ie/media/k1app1wt/hse-logo-black-png.png", width=200)
+    st.sidebar.title("📃 Waiting List App")
+    if st.sidebar.button("Created by Dave Maher"):
+        st.sidebar.write("This application intellectual property belongs to Dave Maher.")
+
+    st.sidebar.markdown("---")
     
-    # File Upload
-    uploaded = st.file_uploader("Upload Data (Excel)", type=["xlsx"])
-    if uploaded:
-        try:
-            raw = pd.read_excel(uploaded)
-            if 'Category' not in raw.columns or 'Date' not in raw.columns:
-                st.error("File must contain 'Category' and 'Date' columns.")
-            else:
-                if 'Referral_From' not in raw.columns:
-                    raw['Referral_From'] = "Unknown"
-                raw.dropna(subset=['Category'], inplace=True)
-                raw['Category'] = raw['Category'].astype(str)
-                # Save RAW data
-                st.session_state.raw_df = raw
-                st.success("Data Loaded!")
-        except Exception as e:
-            st.error(f"Error: {e}")
+    # Central file uploader and data processing
+    # Display file uploader only if no file has been uploaded yet
+    if not st.session_state.file_uploaded:
+        uploaded_file = st.file_uploader("📂 Upload an Excel file with waiting list data", type=["xlsx"], key="main_uploader")
 
-    st.markdown("---")
-    
-    if st.session_state.raw_df is not None:
-        st.subheader("Category Weights")
-        cats = sorted(st.session_state.raw_df['Category'].unique())
-        for c in cats:
-            val = st.slider(f"Weight {c}", 0, 100, st.session_state.custom_weights.get(c, 50), key=f"w_{c}")
-            st.session_state.custom_weights[c] = val
+        if uploaded_file is not None:
+            try:
+                df_uploaded = pd.read_excel(uploaded_file)
+                
+                # Check if DataFrame is empty after reading
+                if df_uploaded.empty:
+                    st.warning("The uploaded Excel file is empty. Please upload a file with data.")
+                    st.session_state.df = None
+                    st.session_state.file_uploaded = False # Keep uploader visible
+                else:
+                    # Initial data cleaning
+                    df_uploaded['Date'] = pd.to_datetime(df_uploaded['Date'], errors='coerce')
+                    if 'Category' not in df_uploaded.columns:
+                        st.error("The uploaded file must contain a 'Category' column.")
+                        st.session_state.df = None
+                        st.session_state.file_uploaded = False # Keep uploader visible
+                    
+                    if 'Referral_From' not in df_uploaded.columns:
+                        st.warning("⚠️ The 'Referral_From' column was not found in your uploaded data. A dummy 'Referral_From' column has been generated for the Sankey diagram to ensure functionality. Please ensure your input file contains a 'Referral_From' column for accurate results.")
+                        dummy_referrals = np.random.choice(['Clinic A', 'Clinic B', 'Self-Referral', 'Hospital'], size=len(df_uploaded))
+                        df_uploaded['Referral_From'] = dummy_referrals
 
-# Main Content
-if st.session_state.raw_df is None:
-    st.info("Please upload an Excel file to begin.")
-    st.stop()
+                    df_uploaded.dropna(subset=['Category'], inplace=True)
+                    df_uploaded['Category'] = df_uploaded['Category'].astype(str)
 
-# Process Data (Run every time, but from immutable raw_df)
-# Fix #1: This ensures we don't drift the waiting days by repeated modification
-df_proc = calculate_wps_components(st.session_state.raw_df, st.session_state.custom_weights)
-st.session_state.processed_df = df_proc
+                    # Initialise custom_priority_weights for new categories
+                    for cat in df_uploaded['Category'].unique():
+                        if cat not in st.session_state.custom_priority_weights:
+                            st.session_state.custom_priority_weights[cat] = 50 # A reasonable default
 
-available_cats = sorted(df_proc['Category'].unique())
-cat_colors = {c: DEFAULT_COLORS.get(c, "#888888") for c in available_cats}
+                    # Call the new function to calculate WPS components
+                    df_processed = calculate_wps_components(
+                        df_uploaded,
+                        st.session_state.custom_priority_weights
+                    )
 
-tab1, tab2 = st.tabs(["📉 Optimisation & Simulation", "⚖️ WPS Weighting"])
+                    st.session_state.df = df_processed
+                    st.session_state.available_categories = sorted(df_processed['Category'].unique().tolist())
+                    st.session_state.category_colors = {cat: DEFAULT_COLORS.get(cat, "#808080") for cat in st.session_state.available_categories}
+                    
+                    st.session_state.file_uploaded = True # Set flag to hide uploader
+                    st.success("File uploaded and processed successfully! You can now navigate the app.")
+                    st.rerun() # Rerun to hide the uploader and display the content
+            except Exception as e:
+                st.error(f"Error processing the uploaded file: {e}")
+                st.session_state.df = None # Clear data on error
+                st.session_state.file_uploaded = False # Keep uploader visible
+    elif st.session_state.file_uploaded:
+        st.info("File already uploaded. Use the tabs below to navigate.")
 
-# --- TAB 1: OPTIMISATION ---
-with tab1:
-    st.title("Waiting List Simulation")
-    
-    # Inputs
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        n_therapists = st.number_input("Therapists", 1, 50, 5)
-    with c2:
-        sess_per_week = st.number_input("Sessions/Therapist/Week", 1, 50, 15)
-    with c3:
-        n_weeks = st.selectbox("Projection Weeks", [12, 24, 52], index=0)
-        
-    st.markdown("### ⚙️ Simulation Strategy")
-    col_strat, col_len = st.columns(2)
-    with col_strat:
-        strategy = st.selectbox("Allocation Strategy", 
-            ["Priority Split", "Urgency-Weighted Scheduling", "1 in 4 weeks for P3/P4"])
-    with col_len:
-        sess_len_key = st.radio("Session Length (P3/P4)", ["60 min", "50 min", "44 min"], horizontal=True)
+    # Check if data is loaded before rendering pages
+    if st.session_state.df is None:
+        pass # The initial st.info("Please upload an Excel file...") handles this
+    else:
+        # IMPORTANT: Recalculate WPS components every time the app runs
+        # to ensure they reflect the latest slider values for weights/multipliers.
+        df = calculate_wps_components(
+            st.session_state.df,
+            st.session_state.custom_priority_weights
+        )
+        available_categories = st.session_state.available_categories
+        category_colors = st.session_state.category_colors
 
-    # Advanced Inputs
-    with st.expander("Advanced Configuration (Sessions & Frequency)"):
-        col_a, col_b = st.columns(2)
-        avg_sess = {}
-        weeks_btwn = {}
-        for c in available_cats:
-            with col_a:
-                avg_sess[c] = st.number_input(f"Avg Sessions ({c})", 1, 20, 6, key=f"as_{c}")
-            with col_b:
-                weeks_btwn[c] = st.number_input(f"Weeks Between ({c})", 1, 12, 2, key=f"wb_{c}")
+        # Use st.tabs for navigation
+        tab1, tab2 = st.tabs(["Waiting List Optimisation", "Wait List Weights"])
 
-    # Run Simulation
-    if st.button("Run Simulation"):
-        with st.spinner("Calculating Forecasts..."):
-            # Forecasts
-            forecasts = get_prophet_forecast(df_proc, n_weeks, available_cats)
+        with tab1:
+            st.title("📃 Waiting List Optimisation")
+
+            st.markdown("""
+            This application helps optimise therapy waitlist management by:
+            - Analysing current waitlist data
+            - Projecting future waitlist trends
+            - Simulating different scheduling strategies
+            - Providing ML-based predictions
+            """)
+
+            st.subheader("📊 Current Data Overview")
+            st.write(df.head())
+
+            # Moved Configuration to sidebar for Tab 1
+            st.sidebar.header("⚙️ Configuration")
             
-            # Initial Backlog
-            initial_bl = df_proc['Category'].value_counts().to_dict()
-            
-            # Median Wait Days (Fix #4: Use Median)
-            median_wait = df_proc.groupby('Category')['Waiting_Days'].median().to_dict()
-            
-            # Normalise WPS factors for simulation
-            tot_fact = st.session_state.wps_priority_factor + st.session_state.wps_time_factor
-            wps_norm = {
-                'priority': st.session_state.wps_priority_factor / tot_fact if tot_fact else 0,
-                'wait_time': st.session_state.wps_time_factor / tot_fact if tot_fact else 0
-            }
-            
-            # Run Sim
-            weeks, bl_hist, treated_hist = simulate_backlog_reduction(
-                sess_len_key, strategy, n_therapists, sess_per_week,
-                forecasts, n_weeks, initial_bl, avg_sess, weeks_btwn,
-                available_cats, st.session_state.custom_weights,
-                median_wait, wps_norm
+            num_therapists = st.sidebar.number_input(
+                "👩‍⚕️ Number of Therapists",
+                min_value=1,
+                max_value=20,
+                value=1,
+                help="Enter the number of available therapists (1-20)",
+                key="num_therapists_opt"
             )
             
-            # Results
-            fig = go.Figure()
-            for c in available_cats:
-                fig.add_trace(go.Scatter(
-                    x=weeks, y=bl_hist[c], mode='lines', 
-                    name=c, line=dict(color=cat_colors[c])
-                ))
+            sessions_per_therapist_per_week = st.sidebar.number_input(
+                "🗓️ Sessions per Therapist per Week",
+                min_value=1,
+                max_value=40,
+                value=15,
+                help="Enter the number of sessions per therapist per week (1-40)",
+                key="sessions_per_therapist_opt"
+            )
             
-            fig.update_layout(title="Backlog Projection", xaxis_title="Week", yaxis_title="Patients Waiting")
-            st.plotly_chart(fig, use_container_width=True)
+            num_weeks = st.sidebar.selectbox(
+                "📅 Number of Weeks for Projection",
+                [12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52],
+                index=0,
+                key="num_weeks_opt"
+            )
             
-            # Metrics
-            total_start = sum(initial_bl.values())
-            total_end = sum([bl_hist[c][-1] for c in available_cats])
-            delta = total_end - total_start
+            st.sidebar.markdown("---")
+            st.sidebar.subheader("📊 Average Sessions and Weeks Between")
             
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Start Backlog", total_start)
-            m2.metric("End Backlog", int(total_end))
-            m3.metric("Net Change", int(delta), delta_color="inverse")
+            avg_sessions_per_category = {}
+            avg_weeks_between_sessions = {}
             
-            # Show Analysis Charts
-            st.markdown("---")
-            show_referral_charts(df_proc, available_cats, cat_colors)
+            default_avg_sessions = {"P1": 6, "P2": 6, "P3": 4, "P4": 3}
+            default_avg_weeks_between = {"P1": 1, "P2": 2, "P3": 3, "P4": 4}
 
-# --- TAB 2: WPS WEIGHTS ---
-with tab2:
-    st.title("WPS Configuration")
-    st.info("Adjust how Priority vs Waiting Time impacts the final score.")
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        p_factor = st.slider("Priority Factor", 0.0, 1.0, st.session_state.wps_priority_factor)
-        st.session_state.wps_priority_factor = p_factor
-    with c2:
-        t_factor = st.slider("Wait Time Factor", 0.0, 1.0, st.session_state.wps_time_factor)
-        st.session_state.wps_time_factor = t_factor
-        
-    # Recalculate WPS for display
-    # Normalise
-    total = p_factor + t_factor
-    norm_p = p_factor/total if total else 0
-    norm_t = t_factor/total if total else 0
-    
-    # Calculate
-    display_df = df_proc.copy()
-    display_df['WPS'] = (display_df['Priority_Score'] * norm_p) + ((display_df['Waiting_Days'] / 5) * norm_t)
-    display_df = display_df.sort_values(['WPS', 'Waiting_Days'], ascending=[False, False])
-    
-    st.dataframe(display_df[['Date', 'Category', 'Waiting_Days', 'Priority_Score', 'WPS']].head(100))
-    
-    # Download
-    csv = display_df.to_csv(index=False).encode('utf-8')
-    st.download_button("Download Prioritised List", csv, "prioritised_list.csv", "text/csv")
-    
-    # Distribution
-    fig = px.histogram(display_df, x="WPS", color="Category", color_discrete_map=cat_colors, nbins=30)
-    st.plotly_chart(fig, use_container_width=True)
+            for category in available_categories:
+                avg_sessions_per_category[category] = st.sidebar.number_input(
+                    f"Average Sessions for {category}", 
+                    min_value=1, 
+                    value=default_avg_sessions.get(category, 1),
+                    key=f"avg_sessions_opt_{category}"
+                )
+                
+                avg_weeks_between_sessions[category] = st.sidebar.number_input(
+                    f"Average Weeks Between Sessions for {category}", 
+                    min_value=1, 
+                    value=default_avg_weeks_between.get(category, 1),
+                    key=f"avg_weeks_between_opt_{category}"
+                )
+
+            st.sidebar.markdown("---")
+            
+            # Consolidated Patient Category Weights section with expander
+            st.sidebar.subheader("⚖️ Patient Category Weights")
+            with st.sidebar.expander("More Info on Patient Category Weights"):
+                st.markdown("""
+                These weights define the relative importance of each patient category (P1 to P4)
+                for both the 'Urgency-Weighted Scheduling' strategy (on this tab) and as the
+                'Priority Score' component in the Weighted Priority Score (WPS) calculation
+                (on the 'Wait List Weights' tab). Higher weights mean more sessions will be
+                allocated to that category in simulations, and a higher contribution to WPS.
+                """)
+
+            unique_priorities = sorted(df['Category'].unique().tolist())
+            for priority in unique_priorities:
+                current_value = st.sidebar.slider(
+                    f"Weight for {priority}", 
+                    min_value=0,
+                    max_value=100,
+                    value=st.session_state.custom_priority_weights.get(priority, 50), 
+                    step=5,
+                    key=f"custom_priority_weight_{priority}"
+                )
+                st.session_state.custom_priority_weights[priority] = current_value
+
+
+            st.markdown("---")
+            st.subheader("🔄️ Initial Backlog Counts")
+            
+            backlog_initial = {
+                category: df[df["Category"] == category].shape[0] 
+                for category in available_categories
+            }
+            total_patients = sum(backlog_initial.values())
+            
+            backlog_percentage = {}
+            if total_patients > 0:
+                backlog_percentage = {
+                    category: round((count / total_patients) * 100, 0)
+                    for category, count in backlog_initial.items()
+                }
+            else:
+                st.info("No patients found in the uploaded data.")
+
+            display_categories = sorted(available_categories) + ["Total"]
+            columns = st.columns(len(display_categories))
+            
+            for i, category in enumerate(display_categories):
+                with columns[i]:
+                    if category == "Total":
+                        st.metric(f"{category} Patients", total_patients)
+                        st.markdown(f"""
+                            <div style="background-color: {DEFAULT_COLORS['Total']}; width: 100%; height: 20px; opacity: 0.6; border-radius: 10px;"></div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        count = backlog_initial.get(category, 0)
+                        percentage = backlog_percentage.get(category, 0)
+                        st.metric(f"{category} Patients", count)
+                        progress_color = category_colors.get(category, "#CCCCCC")
+                        st.markdown(f"""
+                            <div style="background-color: {progress_color}; width: {percentage}%; height: 20px; opacity: 0.6; border-radius: 10px;"></div>
+                        """, unsafe_allow_html=True)
+                        st.write(f"{percentage:.0f}% of total")
+
+            st.markdown("---")
+            st.subheader("📉📈 Forecasting New Referrals with Prophet")
+            
+            # Cached function for Prophet forecasting
+            @st.cache_data
+            def get_prophet_forecast(data_df, num_weeks_for_forecast, categories):
+                forecasted_referrals = {}
+                df_prophet_cached = data_df.copy()
+                df_prophet_cached['WeekStartDate'] = df_prophet_cached['Date'].dt.to_period('W').dt.start_time
+                weekly_referrals_cached = df_prophet_cached.groupby(['WeekStartDate', 'Category']).size().reset_index(name='Count')
+
+                for category in categories:
+                    category_data = weekly_referrals_cached[weekly_referrals_cached['Category'] == category].copy()
+                    category_data.rename(columns={'WeekStartDate': 'ds', 'Count': 'y'}, inplace=True)
+                    
+                    if len(category_data) >= 2:
+                        try:
+                            m = Prophet(weekly_seasonality=True, daily_seasonality=False, changepoint_prior_scale=0.05) 
+                            m.fit(category_data)
+                            future = m.make_future_dataframe(periods=num_weeks_for_forecast, freq='W')
+                            forecast = m.predict(future)
+                            forecast['yhat'] = forecast['yhat'].apply(lambda x: max(0, round(x)))
+                            forecasted_referrals[category] = forecast[['ds', 'yhat']]
+                        except Exception as e:
+                            st.warning(f"Could not train Prophet for {category} (Error: {e}). Falling back to historical average.")
+                            mean_val = weekly_referrals_cached[weekly_referrals_cached['Category'] == category]['Count'].mean()
+                            dummy_forecast_data = {'ds': pd.to_datetime(pd.date_range(start=df_prophet_cached['Date'].max(), periods=num_weeks_for_forecast, freq='W')),
+                                                   'yhat': [max(0, round(mean_val))] * num_weeks_for_forecast}
+                            forecasted_referrals[category] = pd.DataFrame(dummy_forecast_data)
+                    else:
+                        st.warning(f"Insufficient data for Prophet forecasting for {category}. Falling back to historical average.")
+                        mean_val = weekly_referrals_cached[weekly_referrals_cached['Category'] == category]['Count'].mean() if not weekly_referrals_cached[weekly_referrals_cached['Category'] == category].empty else 0
+                        dummy_forecast_data = {'ds': pd.to_datetime(pd.date_range(start=df_prophet_cached['Date'].max(), periods=num_weeks_for_forecast, freq='W')),
+                                               'yhat': [max(0, round(mean_val))] * num_weeks_for_forecast}
+                        forecasted_referrals[category] = pd.DataFrame(dummy_forecast_data)
+                return forecasted_referrals
+
+            with st.spinner("Training Prophet models and forecasting new referrals..."):
+                forecasted_new_referrals_per_week = get_prophet_forecast(st.session_state.df, num_weeks, available_categories)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("⚙️ Session Configuration")
+                selected_session = st.radio(
+                    "🕒 Session length (P3/P4):",
+                    ["60 min", "50 min", "44 min"],
+                    key="selected_session_opt"
+                )
+            with col2:
+                st.subheader("📅 Scheduling Strategy")
+                strategy_options = [
+                    "Priority Split",
+                    "Urgency-Weighted Scheduling"
+                ]
+                if "P3" in available_categories or "P4" in available_categories:
+                    strategy_options.insert(0, "1 in 4 weeks for P3/P4")
+
+                selected_strategy = st.selectbox(
+                    "📌 Select strategy:",
+                    strategy_options,
+                    index=strategy_options.index("Urgency-Weighted Scheduling") if "Urgency-Weighted Scheduling" in strategy_options else 0,
+                    key="selected_strategy_opt"
+                )
+
+            # --- Calculate average WPS components for simulation ---
+            if 'Waiting_Days' in df.columns:
+                avg_waiting_days_per_category = df.groupby('Category')['Waiting_Days'].mean().to_dict()
+            else:
+                avg_waiting_days_per_category = {cat: 0 for cat in available_categories}
+
+
+            # Normalise factors to sum to 1 for simulation (consistent with WPS calculation)
+            total_wps_factors_for_sim = st.session_state.priority_weight_factor + st.session_state.wait_time_weight_factor
+            if total_wps_factors_for_sim == 0:
+                priority_weight_factor_norm_sim = 0
+                wait_time_weight_factor_norm_sim = 0
+            else:
+                priority_weight_factor_norm_sim = st.session_state.priority_weight_factor / total_wps_factors_for_sim
+                wait_time_weight_factor_norm_sim = st.session_state.wait_time_weight_factor / total_wps_factors_for_sim
+            
+            risk_weight_factor_norm_sim = 0
+
+
+            try:
+                weeks, backlog_projection, patients_seen_per_week = simulate_backlog_reduction(
+                    selected_session,
+                    selected_strategy,
+                    num_therapists,
+                    sessions_per_therapist_per_week,
+                    forecasted_new_referrals_per_week,
+                    num_weeks,
+                    backlog_initial,
+                    avg_sessions_per_category,
+                    avg_weeks_between_sessions,
+                    available_categories,
+                    st.session_state.custom_priority_weights,
+                    avg_waiting_days_per_category,
+                    priority_weight_factor_norm_sim,
+                    wait_time_weight_factor_norm_sim
+                )
+                
+                st.subheader("📉 Simulation Results")
+                st.info("""
+                This simulation projects backlog changes based on your inputs and Prophet's forecasted new referrals.
+                A decreasing backlog indicates effective management.
+                The '1 in 4 weeks for P3/P4' strategy may show temporary growth for P1/P2
+                as their sessions are paused to prioritise P3/P4.
+                To observe consistent backlog growth with other strategies, consider reducing the number of therapists
+                or sessions per therapist per week, or increasing average sessions/decreasing weeks between sessions.
+                """)
+
+                fig = go.Figure()
+                for category in available_categories:
+                    projection = backlog_projection[category]
+                    fig.add_trace(go.Scatter(
+                        x=weeks,
+                        y=projection,
+                        mode='lines+markers', # Keep lines and markers
+                        name=f'{category} Backlog',
+                        line=dict(color=category_colors.get(category, "#CCCCCC")), # Use category colors
+                        # Removed fill='tozeroy'
+                        hovertemplate="Week: %{x}<br>" + category + ": %{y} patients"
+                    ))
+                fig.update_layout(
+                    title=f"📉 Backlog Reduction Over {num_weeks} Weeks",
+                    xaxis_title="Weeks",
+                    xaxis_range=[0, num_weeks],
+                    yaxis_title="Number of Patients",
+                    yaxis_range=[0, max(max(p) for p in backlog_projection.values()) * 1.1 if backlog_projection else 10]
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                st.markdown("---")
+                st.subheader("🎯 Efficiency Metrics")
+                col1, col2 = st.columns(2)
+                
+                final_total_backlog = sum(backlog_projection[cat][-1] for cat in available_categories)
+                initial_total_backlog = sum(backlog_initial.values())
+                net_backlog_change = final_total_backlog - initial_total_backlog
+
+                with col1:
+                    st.metric(
+                        "Net Change in Total Backlog",
+                        f"{net_backlog_change:.0f} patients",
+                        delta=f"{net_backlog_change:.0f} patients",
+                        delta_color="inverse"
+                    )
+
+                    if "P3" in available_categories or "P4" in available_categories:
+                        total_extra_sessions, extra_sessions_per_day, extra_sessions_per_week = calculate_extra_sessions(
+                            selected_session,
+                            num_therapists,
+                            num_weeks
+                        )
+                        
+                        st.metric(
+                            "Extra Sessions from Shorter Session Length",
+                            f"{extra_sessions_per_day} sessions per day per therapist"
+                        )
+                        st.metric(
+                            "Extra Weekly Capacity (All Therapists)",
+                            f"{extra_sessions_per_week} sessions per week"
+                        )
+                    else:
+                        st.info("P3/P4 categories are not present in the data, so specific P3/P4 efficiency metrics are not displayed.")
+                
+                with col2:
+                    if "P3" in available_categories or "P4" in available_categories:
+                        p3p4_weeks_multiplier = num_weeks // 4 if selected_strategy == "1 in 4 weeks for P3/P4" else num_weeks
+                        total_p3p4_sessions_capacity = 0
+                        if selected_strategy == "1 in 4 weeks for P3/P4":
+                            total_p3p4_sessions_capacity = (extra_sessions_per_week * p3p4_weeks_multiplier)
+                        else:
+                            total_p3p4_sessions_capacity = sum(patients_seen_per_week[cat].sum() for cat in ["P3", "P4"] if cat in available_categories)
+
+                        st.metric(
+                            "Total P3/P4 Sessions Capacity (Simulated)",
+                            f"{total_p3p4_sessions_capacity:.0f} sessions"
+                        )
+                    
+                    total_patients_seen = sum(patients_seen_per_week[cat].sum() for cat in available_categories)
+                    st.metric(
+                        "Total Patients Seen (Simulated)",
+                        f"{total_patients_seen:.0f} patients"
+                    )
+
+            except ValueError as e:
+                st.error(f"Configuration Error: {e}")
+            except Exception as e:
+                st.error(f"An unexpected error occurred during simulation: {e}")
+
+            st.markdown("---")
+            show_referral_charts(df, available_categories, category_colors)
+
+            st.markdown("---")
+            st.markdown("This implementation has been tested using test data. Adjustments may be required to ensure optimal performance with real-world waiting list data.")
+            st.markdown("Created by Dave Maher")
+
+
+        with tab2:
+            st.title("⚖️ Dynamic Weighted Scheduling for Waiting Lists")
+
+            st.markdown("""
+            This page allows you to dynamically adjust weighting factors for patient priority and wait time
+            to generate a Weighted Priority Score (WPS) for each patient.
+            """)
+
+            with st.expander("💡 What the software does:", expanded=False):
+                st.markdown("""
+                **💻 What the software does:**
+
+                **📥 You give it a spreadsheet with a list of patients:**
+                * When they joined the waiting list (date).
+                * How urgent they are (P1 = super urgent, P4 = least urgent).
+
+                **🧠 It calculates a score for each patient, called the Weighted Priority Score (WPS):**
+                * It’s like giving each person a “fairness” score for how soon they should get help.
+                * The score depends on 2 adjustable factors:
+                    * **Priority Score:** Based on the patient's category (P1, P2, etc.) and the "Patient Category Weights" set on the 'Waiting List Optimisation' tab.
+                    * **Waiting Days:** The actual number of days the patient has been waiting, divided by a scaling factor of `5` to balance its impact.
+
+                **The formula for WPS is:**
+                `WPS = (Priority_Score * Normalised_Priority_Weight_Factor) +`
+                `      (Waiting_Days / 5 * Normalised_Wait_Time_Weight_Factor)`
+
+                Where:
+                * `Normalised_..._Weight_Factor` are the normalised values of the "Priority Weight Factor" and "Wait Time Weight Factor" sliders below, ensuring they sum to 1.
+                * `Priority_Score` is directly from the "Patient Category Weights" (e.g., P1=100, P2=75, etc.).
+
+                **Higher WPS = more urgent + waited longer**
+
+                **🕹️ On the screen, you can move sliders to adjust how much each of those things matters.**
+                * Do you want urgency (Priority Score) to matter more? Adjust the "Priority Weight Factor" slider.
+                * Should waiting time count for more? Adjust the "Wait Time Weight Factor" slider.
+                * Or maybe you want to balance both equally.
+
+                **📊 The software recalculates everyone’s score instantly and shows a list of patients, sorted from most to least urgent based on the new settings.**
+                **📥 You can download the updated list to use it in the hospital.**
+                """)
+
+
+            # Get unique priorities in the dataset
+            # Ensure df is not None before accessing its columns
+            if st.session_state.df is not None:
+                unique_priorities = df['Category'].unique()
+            else:
+                unique_priorities = [] # Or handle as appropriate if no data is loaded
+
+            # Consolidated WPS Component Weights section with expander
+            st.sidebar.subheader("Adjust WPS Component Weights")
+            with st.sidebar.expander("More Info on WPS Component Weights"):
+                st.markdown("""
+                These factors determine the overall influence of Priority and Wait Time
+                in the Weighted Priority Score (WPS) calculation. Adjust them to prioritise
+                different aspects when ranking individual patients.
+                """)
+
+            # Main weight factors, using session state
+            # Ensure session state variables are initialized before being used as default values
+            st.session_state.priority_weight_factor = st.sidebar.slider("Priority Weight Factor", 0.0, 1.0, st.session_state.priority_weight_factor, key="wps_priority_factor_tab2")
+            st.session_state.wait_time_weight_factor = st.sidebar.slider("Wait Time Weight Factor", 0.0, 1.0, st.session_state.wait_time_weight_factor, key="wps_wait_time_factor_tab2")
+
+            # Normalise factors to sum to 1 (only priority and wait time)
+            total_wps_factors = st.session_state.priority_weight_factor + st.session_state.wait_time_weight_factor
+            if total_wps_factors == 0: # Avoid division by zero if all factors are 0
+                st.sidebar.warning("All weighting factors are zero. Please adjust them to calculate WPS.")
+                priority_weight_factor_norm = 0
+                wait_time_weight_factor_norm = 0
+            else:
+                priority_weight_factor_norm = st.session_state.priority_weight_factor / total_wps_factors
+                wait_time_weight_factor_norm = st.session_state.wait_time_weight_factor / total_wps_factors
+
+            st.sidebar.markdown(f"""
+            <small>Normalised Factors:</small><br>
+            <small>Priority: {priority_weight_factor_norm:.2f}</small><br>
+            <small>Wait Time: {wait_time_weight_factor_norm:.2f}</small><br>
+            """, unsafe_allow_html=True)
+
+            st.sidebar.markdown("---")
+            
+            # Create a copy of the DataFrame for this page's calculations (already has WPS components)
+            if st.session_state.df is not None:
+                df_wps = df.copy() # df here already has the latest WPS components from the main app logic
+
+                # Recalculate WPS with updated Normalised factors.
+                df_wps['WPS'] = (
+                    df_wps['Priority_Score'] * priority_weight_factor_norm
+                    + (df_wps['Waiting_Days'] / 5) * wait_time_weight_factor_norm
+                )
+
+                # Sort by WPS descending, then by Date ascending (oldest to newest)
+                df_sorted = df_wps.sort_values(by=['WPS', 'Date'], ascending=[False, True])
+
+                # Add 'Rank' column
+                df_sorted = df_sorted.reset_index(drop=True)
+                df_sorted.index = df_sorted.index + 1
+                df_sorted.insert(0, 'Rank', df_sorted.index)
+
+                st.write("### Patients Sorted by Weighted Priority Score", df_sorted)
+                st.info("""
+                The 'Priority Score' used in this table is derived from the 'Patient Category Weights'
+                sliders found in the sidebar of the 'Waiting List Optimisation' tab.
+                """)
+
+
+                # Option to download the scored dataset
+                @st.cache_data
+                def convert_df_to_csv(df_to_convert):
+                    return df_to_convert.to_csv(index=False).encode('utf-8')
+                
+                csv = convert_df_to_csv(df_sorted)
+                st.download_button("📥 Download Scored Data as CSV", csv, "weighted_waiting_list.csv", "text/csv", key="download_wps_csv")
+
+                # Add a simple visualisation for WPS distribution
+                st.subheader("Weighted Priority Score Distribution")
+                fig_hist_wps = px.histogram(df_sorted, x='WPS', color='Category',
+                                            title='Distribution of Weighted Priority Scores by Category',
+                                            color_discrete_map=category_colors,
+                                            opacity=0.7)
+                st.plotly_chart(fig_hist_wps, use_container_width=True)
+            else:
+                st.info("Please upload an Excel file in the 'Waiting List Optimisation' tab to view and adjust weights.")
