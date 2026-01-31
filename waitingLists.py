@@ -7,6 +7,7 @@ from datetime import datetime
 import warnings
 from prophet import Prophet
 from streamlit_echarts import st_echarts
+import base64
 
 # --- PAGE CONFIGURATION (Must be first) ---
 st.set_page_config(
@@ -56,13 +57,18 @@ st.markdown("""
     }
 
     /* Card Styling */
-    .css-1r6slb0, .stDataFrame, .stPlotlyChart {
+    .css-1r6slb0, .stDataFrame, .stPlotlyChart, div[data-testid="stEcharts"] {
         background-color: white;
         padding: 1.5rem;
         border-radius: 1rem;
         border: 1px solid #e2e8f0;
-        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
         margin-bottom: 1rem;
+        transition: box-shadow 0.2s ease-in-out;
+    }
+    
+    .stPlotlyChart:hover, div[data-testid="stEcharts"]:hover {
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
     }
 
     /* Sidebar Styling */
@@ -77,6 +83,20 @@ st.markdown("""
         font-weight: 700;
     }
 
+    /* HSE Styled Sliders */
+    div[data-baseweb="slider"] div[role="slider"] {
+        background-color: #006858 !important;
+        box-shadow: 0 0 0 4px rgba(0, 104, 88, 0.1) !important;
+    }
+    div[data-baseweb="slider"] div[class*="st-"] { 
+        /* Target the track line - simple approach */
+        background-color: #cbd5e1; 
+    }
+    /* This targets the filled part of the slider track in some Streamlit versions */
+    div[data-baseweb="slider"] > div > div > div > div {
+        background-color: #006858 !important;
+    }
+
     /* Buttons (HSE Green) */
     .stButton > button {
         background-color: #006858;
@@ -84,6 +104,7 @@ st.markdown("""
         border-radius: 0.5rem;
         border: none;
         font-weight: 600;
+        padding: 0.5rem 1rem;
         transition: all 0.2s;
     }
     .stButton > button:hover {
@@ -94,21 +115,24 @@ st.markdown("""
 
     /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
+        gap: 8px;
         background-color: transparent;
+        margin-bottom: 1rem;
     }
     .stTabs [data-baseweb="tab"] {
-        height: 50px;
+        height: 45px;
         white-space: pre-wrap;
         background-color: white;
-        border-radius: 8px 8px 0px 0px;
+        border-radius: 8px;
+        border: 1px solid #e2e8f0;
         color: #64748b;
         font-weight: 600;
+        padding: 0 20px;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #fff;
+        background-color: #effcf9;
         color: #006858;
-        border-bottom: 2px solid #006858;
+        border: 1px solid #006858;
     }
 
     /* Footer */
@@ -129,6 +153,40 @@ st.markdown("""
     .attribution-text {
         font-weight: 700;
         color: #006858;
+    }
+    
+    /* Print Report Styling */
+    .report-container {
+        background-color: white;
+        padding: 40px;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        margin-bottom: 20px;
+    }
+    .report-header {
+        border-bottom: 2px solid #006858;
+        padding-bottom: 20px;
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+    }
+    .report-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 20px;
+        font-size: 0.9rem;
+    }
+    .report-table th {
+        background-color: #f1f5f9;
+        color: #1e293b;
+        text-align: left;
+        padding: 12px;
+        border-bottom: 2px solid #e2e8f0;
+    }
+    .report-table td {
+        padding: 12px;
+        border-bottom: 1px solid #e2e8f0;
+        color: #475569;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -153,7 +211,19 @@ st.markdown("""
             </div>
         </div>
         <div style="max-width: 42rem;">
-            <h2 style="font-size: 2.5rem; font-weight: 900; line-height: 1.2; margin-bottom: 1rem; color: white;">Waiting List Strategist</h2>
+            <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 1rem;">
+                 <!-- Icon Circle -->
+                <div style="background: rgba(255,255,255,0.15); width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(5px);">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                </div>
+                <h2 style="font-size: 2.5rem; font-weight: 900; line-height: 1.2; margin: 0; color: white;">Waiting List Strategist</h2>
+            </div>
             <p style="color: rgba(236, 253, 245, 0.9); font-size: 1.125rem; line-height: 1.6;">
                 Strategic command centre using 'Prophet' AI to forecast patient influx, simulate staffing scenarios, and re-rank priorities.
             </p>
@@ -200,11 +270,11 @@ session_types = {
 }
 
 DEFAULT_COLORS = {
-    "P1": "#FFFF00",  # Yellow
-    "P2": "#00FF00",  # Green
-    "P3": "#FFA500",  # Orange
-    "P4": "#FF0000",  # Red
-    "Total": "#0000FF" # Blue
+    "P1": "#eab308",  # Yellow-500
+    "P2": "#22c55e",  # Green-500
+    "P3": "#f97316",  # Orange-500
+    "P4": "#ef4444",  # Red-500
+    "Total": "#3b82f6" # Blue-500
 }
 
 def map_waiting_days_to_category(waiting_days):
@@ -223,6 +293,68 @@ def calculate_wps_components(df, custom_priority_weights):
     df_copy['Waiting_Days'] = (today - df_copy['Date']).dt.days
     df_copy['Priority_Score'] = df_copy['Category'].map(custom_priority_weights).fillna(0)
     return df_copy
+
+def generate_report_html(df_metrics, df_wps):
+    """Generates a beautiful HTML report for printing"""
+    
+    # Generate Table Rows
+    table_rows = ""
+    for index, row in df_wps.head(15).iterrows():
+        table_rows += f"""
+        <tr>
+            <td>#{row['Rank']}</td>
+            <td>{row['Category']}</td>
+            <td>{row['Date'].strftime('%d %b %Y')}</td>
+            <td>{row['Waiting_Days']} days</td>
+            <td><strong>{row['WPS']:.2f}</strong></td>
+        </tr>
+        """
+        
+    html = f"""
+    <div class="report-container">
+        <div class="report-header">
+            <div>
+                <h1 style="color: #006858; font-weight: 800; margin: 0;">Waiting List Strategy Report</h1>
+                <p style="color: #64748b; margin: 5px 0;">Generated by HSE Capital & Estates • {datetime.now().strftime('%d %B %Y')}</p>
+            </div>
+            <div style="text-align: right;">
+                 <h2 style="margin: 0; color: #1e293b;">Executive Summary</h2>
+            </div>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px;">
+            <div style="background: #f8fafc; padding: 15px; border-radius: 8px;">
+                <p style="font-size: 0.8rem; text-transform: uppercase; color: #64748b; font-weight: 700;">Total Patients</p>
+                <p style="font-size: 1.5rem; color: #006858; font-weight: 800; margin: 0;">{df_metrics['Total']}</p>
+            </div>
+            <div style="background: #f8fafc; padding: 15px; border-radius: 8px;">
+                <p style="font-size: 0.8rem; text-transform: uppercase; color: #64748b; font-weight: 700;">Avg Wait</p>
+                <p style="font-size: 1.5rem; color: #006858; font-weight: 800; margin: 0;">{df_metrics['AvgWait']:.0f} days</p>
+            </div>
+        </div>
+        
+        <h3 style="color: #1e293b; margin-top: 30px;">Top Priority Patients (WPS Ranked)</h3>
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Category</th>
+                    <th>Date Added</th>
+                    <th>Wait Time</th>
+                    <th>WPS Score</th>
+                </tr>
+            </thead>
+            <tbody>
+                {table_rows}
+            </tbody>
+        </table>
+        
+        <div style="margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 20px; font-size: 0.8rem; color: #94a3b8; text-align: center;">
+            CONFIDENTIAL: This report contains sensitive patient data. For internal HSE use only.
+        </div>
+    </div>
+    """
+    return html
 
 def show_referral_charts(df, available_categories, category_colors):
     if "Category" not in df.columns:
@@ -261,8 +393,9 @@ def show_referral_charts(df, available_categories, category_colors):
             fig_bar = px.bar(filtered_referral_counts, x="Referral_From", y="Count", color="Category",
                              title="Referrals per Referrer by Category",
                              labels={"Count": "Number of Referrals"},
-                             barmode="stack", opacity=0.6,
+                             barmode="stack", opacity=0.8,
                              color_discrete_map=category_colors)
+            fig_bar.update_layout(plot_bgcolor='white', paper_bgcolor='white')
             st.plotly_chart(fig_bar, use_container_width=True)
 
         with col2:
@@ -270,10 +403,11 @@ def show_referral_charts(df, available_categories, category_colors):
                                        title="Referral Breakdown by Category and Referrer",
                                        color="Category",
                                        color_discrete_map=category_colors)
+            fig_sunburst.update_layout(plot_bgcolor='white', paper_bgcolor='white')
             st.plotly_chart(fig_sunburst, use_container_width=True)
 
     # Sankey Diagram
-    st.subheader("Flow of Patients: Referral → Category → Wait Time (Interactive)")
+    st.subheader("Flow of Patients: Referral → Category → Wait Time")
     df_sankey = df.copy()
     df_sankey['Wait_Time_Category_Sankey'] = df_sankey['Waiting_Days'].apply(map_waiting_days_to_category)
 
@@ -297,7 +431,7 @@ def show_referral_charts(df, available_categories, category_colors):
                 "label": {"position": "right"}
             }]
         }
-        st_echarts(option, height="600px")
+        st_echarts(option, height="500px")
     else:
         st.warning("Required columns for Sankey diagram are missing.")
 
@@ -428,6 +562,7 @@ if "custom_priority_weights" not in st.session_state:
 
 # --- SIDEBAR LOGIC ---
 with st.sidebar:
+    st.image("https://www.esther.ie/wp-content/uploads/2022/05/HSE-Logo-Green-NEW-no-background.png", width=220)
     st.markdown("### 🔐 Access")
     if not st.session_state.password_verified:
         try:
@@ -445,6 +580,15 @@ with st.sidebar:
     
     if st.session_state.password_verified:
         st.success("Authenticated")
+        st.markdown("---")
+        
+        # PRINT BUTTON
+        if st.button("🖨️ Print Report", help="Generate a printable invoice-style report"):
+            st.session_state.show_report = True
+        else:
+             if "show_report" not in st.session_state:
+                 st.session_state.show_report = False
+
         st.markdown("---")
         if not st.session_state.file_uploaded:
             st.markdown("### 📂 Data Import")
@@ -486,8 +630,6 @@ with st.sidebar:
                 st.rerun()
 
     st.markdown("<div style='margin-top: 50px;'></div>", unsafe_allow_html=True)
-    st.image("https://assets.hse.ie/static/hse-frontend/assets/favicons/favicon.ico", width=50)
-    st.markdown("**HSE Capital & Estates**")
 
 # --- MAIN APP LOGIC ---
 
@@ -495,170 +637,201 @@ if st.session_state.password_verified and st.session_state.df is not None:
     df = calculate_wps_components(st.session_state.df, st.session_state.custom_priority_weights)
     available_categories = st.session_state.available_categories
     category_colors = st.session_state.category_colors
-
-    tab1, tab2 = st.tabs(["Waiting List Optimisation", "Wait List Weights"])
-
-    with tab1:
-        st.info("💡 **Tip:** Adjust the configuration in the sidebar (or below on mobile) to simulate different staffing scenarios.")
-        
-        # --- Sidebar Configurations for Tab 1 ---
-        # Note: Moved visual rendering to sidebar, logic kept here
-        num_therapists = st.sidebar.number_input("👩‍⚕️ Number of Therapists", 1, 20, 1, key="num_therapists_opt")
-        sessions_per_therapist_per_week = st.sidebar.number_input("🗓️ Sessions/Therapist/Week", 1, 40, 15, key="sessions_per_therapist_opt")
-        num_weeks = st.sidebar.selectbox("📅 Projection Weeks", [12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52], 0, key="num_weeks_opt")
-        
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("Clinical Assumptions")
-        
-        avg_sessions_per_category = {}
-        avg_weeks_between_sessions = {}
-        default_avg_sessions = {"P1": 6, "P2": 6, "P3": 4, "P4": 3}
-        default_avg_weeks_between = {"P1": 1, "P2": 2, "P3": 3, "P4": 4}
-
-        for category in available_categories:
-            with st.sidebar.expander(f"{category} Configuration"):
-                avg_sessions_per_category[category] = st.number_input(f"{category} Avg Sessions", 1, value=default_avg_sessions.get(category, 1), key=f"avg_sess_{category}")
-                avg_weeks_between_sessions[category] = st.number_input(f"{category} Weeks Between", 1, value=default_avg_weeks_between.get(category, 1), key=f"avg_weeks_{category}")
-        
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("Patient Category Weights")
-        for priority in sorted(df['Category'].unique()):
-            st.session_state.custom_priority_weights[priority] = st.sidebar.slider(f"{priority} Weight", 0, 100, st.session_state.custom_priority_weights.get(priority, 50), 5, key=f"weight_{priority}")
-
-        # --- Dashboard Content ---
-        backlog_initial = {cat: df[df["Category"] == cat].shape[0] for cat in available_categories}
-        total_patients = sum(backlog_initial.values())
-        
-        st.markdown("### 🔄️ Current Status")
-        cols = st.columns(len(available_categories) + 1)
-        with cols[0]:
-            st.metric("Total Patients", total_patients)
-        for i, category in enumerate(sorted(available_categories)):
-            with cols[i+1]:
-                count = backlog_initial.get(category, 0)
-                st.metric(f"{category} Patients", count, f"{round((count/total_patients)*100)}%")
-
-        st.markdown("---")
-        
-        # Forecasting
-        @st.cache_data
-        def get_prophet_forecast(data_df, num_weeks_for_forecast, categories):
-            forecasted_referrals = {}
-            df_prophet_cached = data_df.copy()
-            df_prophet_cached['WeekStartDate'] = df_prophet_cached['Date'].dt.to_period('W').dt.start_time
-            weekly_referrals_cached = df_prophet_cached.groupby(['WeekStartDate', 'Category']).size().reset_index(name='Count')
-
-            for category in categories:
-                category_data = weekly_referrals_cached[weekly_referrals_cached['Category'] == category].copy()
-                category_data.rename(columns={'WeekStartDate': 'ds', 'Count': 'y'}, inplace=True)
-                
-                if len(category_data) >= 2:
-                    try:
-                        m = Prophet(weekly_seasonality=True, daily_seasonality=False, changepoint_prior_scale=0.05) 
-                        m.fit(category_data)
-                        future = m.make_future_dataframe(periods=num_weeks_for_forecast, freq='W')
-                        forecast = m.predict(future)
-                        forecast['yhat'] = forecast['yhat'].apply(lambda x: max(0, round(x)))
-                        forecasted_referrals[category] = forecast[['ds', 'yhat']]
-                    except:
-                        mean_val = weekly_referrals_cached[weekly_referrals_cached['Category'] == category]['Count'].mean()
-                        dummy_forecast_data = {'ds': pd.to_datetime(pd.date_range(start=df_prophet_cached['Date'].max(), periods=num_weeks_for_forecast, freq='W')), 'yhat': [max(0, round(mean_val))] * num_weeks_for_forecast}
-                        forecasted_referrals[category] = pd.DataFrame(dummy_forecast_data)
-                else:
-                    mean_val = weekly_referrals_cached[weekly_referrals_cached['Category'] == category]['Count'].mean() if not weekly_referrals_cached[weekly_referrals_cached['Category'] == category].empty else 0
-                    dummy_forecast_data = {'ds': pd.to_datetime(pd.date_range(start=df_prophet_cached['Date'].max(), periods=num_weeks_for_forecast, freq='W')), 'yhat': [max(0, round(mean_val))] * num_weeks_for_forecast}
-                    forecasted_referrals[category] = pd.DataFrame(dummy_forecast_data)
-            return forecasted_referrals
-
-        with st.spinner("Running AI Forecasting..."):
-            forecasted_new_referrals_per_week = get_prophet_forecast(st.session_state.df, num_weeks, available_categories)
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("##### ⚙️ Session Logic")
-            selected_session = st.radio("Session length (P3/P4):", ["60 min", "50 min", "44 min"], horizontal=True, key="selected_session_opt")
-        with col2:
-            st.markdown("##### 📅 Scheduling Strategy")
-            strategy_options = ["Priority Split", "Urgency-Weighted Scheduling"]
-            if "P3" in available_categories or "P4" in available_categories:
-                strategy_options.insert(0, "1 in 4 weeks for P3/P4")
-            selected_strategy = st.selectbox("Select strategy:", strategy_options, index=strategy_options.index("Urgency-Weighted Scheduling") if "Urgency-Weighted Scheduling" in strategy_options else 0, key="selected_strategy_opt")
-
-        # Simulation
-        if 'Waiting_Days' in df.columns:
-            avg_waiting_days_per_category = df.groupby('Category')['Waiting_Days'].mean().to_dict()
-        else:
-            avg_waiting_days_per_category = {cat: 0 for cat in available_categories}
-
-        total_wps_factors_for_sim = st.session_state.priority_weight_factor + st.session_state.wait_time_weight_factor
-        priority_weight_factor_norm_sim = st.session_state.priority_weight_factor / total_wps_factors_for_sim if total_wps_factors_for_sim > 0 else 0
-        wait_time_weight_factor_norm_sim = st.session_state.wait_time_weight_factor / total_wps_factors_for_sim if total_wps_factors_for_sim > 0 else 0
-
-        try:
-            weeks, backlog_projection, patients_seen_per_week = simulate_backlog_reduction(
-                selected_session, selected_strategy, num_therapists, sessions_per_therapist_per_week,
-                forecasted_new_referrals_per_week, num_weeks, backlog_initial, avg_sessions_per_category,
-                avg_weeks_between_sessions, available_categories, st.session_state.custom_priority_weights,
-                avg_waiting_days_per_category, priority_weight_factor_norm_sim, wait_time_weight_factor_norm_sim
-            )
-
-            st.markdown("### 📉 Projected Backlog")
-            fig = go.Figure()
-            for category in available_categories:
-                fig.add_trace(go.Scatter(x=weeks, y=backlog_projection[category], mode='lines+markers', name=f'{category} Backlog', line=dict(color=category_colors.get(category, "#CCCCCC"))))
-            fig.update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0), xaxis_title="Weeks", yaxis_title="Patients")
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Metrics
-            final_total_backlog = sum(backlog_projection[cat][-1] for cat in available_categories)
-            net_change = final_total_backlog - total_patients
-            
-            m_col1, m_col2, m_col3 = st.columns(3)
-            with m_col1:
-                st.metric("Net Change", f"{net_change:.0f}", delta=f"{net_change:.0f}", delta_color="inverse")
-            with m_col2:
-                total_patients_seen = sum(patients_seen_per_week[cat].sum() for cat in available_categories)
-                st.metric("Total Patients Seen", f"{total_patients_seen:.0f}")
-            with m_col3:
-                if "P3" in available_categories or "P4" in available_categories:
-                    _, _, extra_cap = calculate_extra_sessions(selected_session, num_therapists, num_weeks)
-                    st.metric("Extra Capacity Generated", f"{extra_cap} / week")
-
-        except Exception as e:
-            st.error(f"Simulation Error: {e}")
-
-        st.markdown("---")
-        show_referral_charts(df, available_categories, category_colors)
-
-    with tab2:
-        st.markdown("### ⚖️ Weighted Priority Score (WPS)")
-        st.markdown("Adjust weighting factors to re-rank the patient list dynamically.")
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            st.session_state.priority_weight_factor = st.slider("Priority Weight Factor", 0.0, 1.0, st.session_state.priority_weight_factor, key="wps_p")
-        with c2:
-            st.session_state.wait_time_weight_factor = st.slider("Wait Time Weight Factor", 0.0, 1.0, st.session_state.wait_time_weight_factor, key="wps_w")
-
+    
+    # Pre-calculate WPS for Report Generation
+    if st.session_state.show_report:
+        # Calculate scores
         total_wps_factors = st.session_state.priority_weight_factor + st.session_state.wait_time_weight_factor
         if total_wps_factors > 0:
             norm_p = st.session_state.priority_weight_factor / total_wps_factors
             norm_w = st.session_state.wait_time_weight_factor / total_wps_factors
-            
             df_wps = df.copy()
             df_wps['WPS'] = (df_wps['Priority_Score'] * norm_p + (df_wps['Waiting_Days'] / 5) * norm_w)
             df_sorted = df_wps.sort_values(by=['WPS', 'Date'], ascending=[False, True]).reset_index(drop=True)
             df_sorted.index += 1
             df_sorted.insert(0, 'Rank', df_sorted.index)
+            
+            # Metrics
+            metrics = {
+                'Total': len(df),
+                'AvgWait': df['Waiting_Days'].mean()
+            }
+            
+            report_html = generate_report_html(metrics, df_sorted)
+            st.markdown(report_html, unsafe_allow_html=True)
+            if st.button("🔙 Close Report"):
+                st.session_state.show_report = False
+                st.rerun()
+        else:
+            st.error("Please configure weights in the 'Wait List Weights' tab first.")
+            st.session_state.show_report = False
+            
+    else:
+        # NORMAL VIEW
+        tab1, tab2 = st.tabs(["Waiting List Optimisation", "Wait List Weights"])
 
-            st.dataframe(df_sorted[['Rank', 'Category', 'Date', 'Waiting_Days', 'WPS']], use_container_width=True)
+        with tab1:
+            st.info("💡 **Tip:** Adjust the configuration in the sidebar (or below on mobile) to simulate different staffing scenarios.")
             
-            csv = df_sorted.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Scored List", csv, "weighted_list.csv", "text/csv")
+            # --- Sidebar Configurations for Tab 1 ---
+            # Note: Moved visual rendering to sidebar, logic kept here
+            num_therapists = st.sidebar.number_input("👩‍⚕️ Number of Therapists", 1, 20, 1, key="num_therapists_opt")
+            sessions_per_therapist_per_week = st.sidebar.number_input("🗓️ Sessions/Therapist/Week", 1, 40, 15, key="sessions_per_therapist_opt")
+            num_weeks = st.sidebar.selectbox("📅 Projection Weeks", [12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52], 0, key="num_weeks_opt")
             
-            st.subheader("Score Distribution")
-            fig_hist = px.histogram(df_sorted, x='WPS', color='Category', color_discrete_map=category_colors, opacity=0.7)
-            st.plotly_chart(fig_hist, use_container_width=True)
+            st.sidebar.markdown("---")
+            st.sidebar.subheader("Clinical Assumptions")
+            
+            avg_sessions_per_category = {}
+            avg_weeks_between_sessions = {}
+            default_avg_sessions = {"P1": 6, "P2": 6, "P3": 4, "P4": 3}
+            default_avg_weeks_between = {"P1": 1, "P2": 2, "P3": 3, "P4": 4}
+
+            for category in available_categories:
+                with st.sidebar.expander(f"{category} Configuration"):
+                    avg_sessions_per_category[category] = st.number_input(f"{category} Avg Sessions", 1, value=default_avg_sessions.get(category, 1), key=f"avg_sess_{category}")
+                    avg_weeks_between_sessions[category] = st.number_input(f"{category} Weeks Between", 1, value=default_avg_weeks_between.get(category, 1), key=f"avg_weeks_{category}")
+            
+            st.sidebar.markdown("---")
+            st.sidebar.subheader("Patient Category Weights")
+            for priority in sorted(df['Category'].unique()):
+                st.session_state.custom_priority_weights[priority] = st.sidebar.slider(f"{priority} Weight", 0, 100, st.session_state.custom_priority_weights.get(priority, 50), 5, key=f"weight_{priority}")
+
+            # --- Dashboard Content ---
+            backlog_initial = {cat: df[df["Category"] == cat].shape[0] for cat in available_categories}
+            total_patients = sum(backlog_initial.values())
+            
+            st.markdown("### 🔄️ Current Status")
+            cols = st.columns(len(available_categories) + 1)
+            with cols[0]:
+                st.metric("Total Patients", total_patients)
+            for i, category in enumerate(sorted(available_categories)):
+                with cols[i+1]:
+                    count = backlog_initial.get(category, 0)
+                    st.metric(f"{category} Patients", count, f"{round((count/total_patients)*100)}%")
+
+            st.markdown("---")
+            
+            # Forecasting
+            @st.cache_data
+            def get_prophet_forecast(data_df, num_weeks_for_forecast, categories):
+                forecasted_referrals = {}
+                df_prophet_cached = data_df.copy()
+                df_prophet_cached['WeekStartDate'] = df_prophet_cached['Date'].dt.to_period('W').dt.start_time
+                weekly_referrals_cached = df_prophet_cached.groupby(['WeekStartDate', 'Category']).size().reset_index(name='Count')
+
+                for category in categories:
+                    category_data = weekly_referrals_cached[weekly_referrals_cached['Category'] == category].copy()
+                    category_data.rename(columns={'WeekStartDate': 'ds', 'Count': 'y'}, inplace=True)
+                    
+                    if len(category_data) >= 2:
+                        try:
+                            m = Prophet(weekly_seasonality=True, daily_seasonality=False, changepoint_prior_scale=0.05) 
+                            m.fit(category_data)
+                            future = m.make_future_dataframe(periods=num_weeks_for_forecast, freq='W')
+                            forecast = m.predict(future)
+                            forecast['yhat'] = forecast['yhat'].apply(lambda x: max(0, round(x)))
+                            forecasted_referrals[category] = forecast[['ds', 'yhat']]
+                        except:
+                            mean_val = weekly_referrals_cached[weekly_referrals_cached['Category'] == category]['Count'].mean()
+                            dummy_forecast_data = {'ds': pd.to_datetime(pd.date_range(start=df_prophet_cached['Date'].max(), periods=num_weeks_for_forecast, freq='W')), 'yhat': [max(0, round(mean_val))] * num_weeks_for_forecast}
+                            forecasted_referrals[category] = pd.DataFrame(dummy_forecast_data)
+                    else:
+                        mean_val = weekly_referrals_cached[weekly_referrals_cached['Category'] == category]['Count'].mean() if not weekly_referrals_cached[weekly_referrals_cached['Category'] == category].empty else 0
+                        dummy_forecast_data = {'ds': pd.to_datetime(pd.date_range(start=df_prophet_cached['Date'].max(), periods=num_weeks_for_forecast, freq='W')), 'yhat': [max(0, round(mean_val))] * num_weeks_for_forecast}
+                        forecasted_referrals[category] = pd.DataFrame(dummy_forecast_data)
+                return forecasted_referrals
+
+            with st.spinner("Running AI Forecasting..."):
+                forecasted_new_referrals_per_week = get_prophet_forecast(st.session_state.df, num_weeks, available_categories)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("##### ⚙️ Session Logic")
+                selected_session = st.radio("Session length (P3/P4):", ["60 min", "50 min", "44 min"], horizontal=True, key="selected_session_opt")
+            with col2:
+                st.markdown("##### 📅 Scheduling Strategy")
+                strategy_options = ["Priority Split", "Urgency-Weighted Scheduling"]
+                if "P3" in available_categories or "P4" in available_categories:
+                    strategy_options.insert(0, "1 in 4 weeks for P3/P4")
+                selected_strategy = st.selectbox("Select strategy:", strategy_options, index=strategy_options.index("Urgency-Weighted Scheduling") if "Urgency-Weighted Scheduling" in strategy_options else 0, key="selected_strategy_opt")
+
+            # Simulation
+            if 'Waiting_Days' in df.columns:
+                avg_waiting_days_per_category = df.groupby('Category')['Waiting_Days'].mean().to_dict()
+            else:
+                avg_waiting_days_per_category = {cat: 0 for cat in available_categories}
+
+            total_wps_factors_for_sim = st.session_state.priority_weight_factor + st.session_state.wait_time_weight_factor
+            priority_weight_factor_norm_sim = st.session_state.priority_weight_factor / total_wps_factors_for_sim if total_wps_factors_for_sim > 0 else 0
+            wait_time_weight_factor_norm_sim = st.session_state.wait_time_weight_factor / total_wps_factors_for_sim if total_wps_factors_for_sim > 0 else 0
+
+            try:
+                weeks, backlog_projection, patients_seen_per_week = simulate_backlog_reduction(
+                    selected_session, selected_strategy, num_therapists, sessions_per_therapist_per_week,
+                    forecasted_new_referrals_per_week, num_weeks, backlog_initial, avg_sessions_per_category,
+                    avg_weeks_between_sessions, available_categories, st.session_state.custom_priority_weights,
+                    avg_waiting_days_per_category, priority_weight_factor_norm_sim, wait_time_weight_factor_norm_sim
+                )
+
+                st.markdown("### 📉 Projected Backlog")
+                fig = go.Figure()
+                for category in available_categories:
+                    fig.add_trace(go.Scatter(x=weeks, y=backlog_projection[category], mode='lines+markers', name=f'{category} Backlog', line=dict(color=category_colors.get(category, "#CCCCCC"))))
+                fig.update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0), xaxis_title="Weeks", yaxis_title="Patients", plot_bgcolor='white', paper_bgcolor='white')
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Metrics
+                final_total_backlog = sum(backlog_projection[cat][-1] for cat in available_categories)
+                net_change = final_total_backlog - total_patients
+                
+                m_col1, m_col2, m_col3 = st.columns(3)
+                with m_col1:
+                    st.metric("Net Change", f"{net_change:.0f}", delta=f"{net_change:.0f}", delta_color="inverse")
+                with m_col2:
+                    total_patients_seen = sum(patients_seen_per_week[cat].sum() for cat in available_categories)
+                    st.metric("Total Patients Seen", f"{total_patients_seen:.0f}")
+                with m_col3:
+                    if "P3" in available_categories or "P4" in available_categories:
+                        _, _, extra_cap = calculate_extra_sessions(selected_session, num_therapists, num_weeks)
+                        st.metric("Extra Capacity Generated", f"{extra_cap} / week")
+
+            except Exception as e:
+                st.error(f"Simulation Error: {e}")
+
+            st.markdown("---")
+            show_referral_charts(df, available_categories, category_colors)
+
+        with tab2:
+            st.markdown("### ⚖️ Weighted Priority Score (WPS)")
+            st.markdown("Adjust weighting factors to re-rank the patient list dynamically.")
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.session_state.priority_weight_factor = st.slider("Priority Weight Factor", 0.0, 1.0, st.session_state.priority_weight_factor, key="wps_p")
+            with c2:
+                st.session_state.wait_time_weight_factor = st.slider("Wait Time Weight Factor", 0.0, 1.0, st.session_state.wait_time_weight_factor, key="wps_w")
+
+            total_wps_factors = st.session_state.priority_weight_factor + st.session_state.wait_time_weight_factor
+            if total_wps_factors > 0:
+                norm_p = st.session_state.priority_weight_factor / total_wps_factors
+                norm_w = st.session_state.wait_time_weight_factor / total_wps_factors
+                
+                df_wps = df.copy()
+                df_wps['WPS'] = (df_wps['Priority_Score'] * norm_p + (df_wps['Waiting_Days'] / 5) * norm_w)
+                df_sorted = df_wps.sort_values(by=['WPS', 'Date'], ascending=[False, True]).reset_index(drop=True)
+                df_sorted.index += 1
+                df_sorted.insert(0, 'Rank', df_sorted.index)
+
+                st.dataframe(df_sorted[['Rank', 'Category', 'Date', 'Waiting_Days', 'WPS']], use_container_width=True)
+                
+                csv = df_sorted.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Download Scored List", csv, "weighted_list.csv", "text/csv")
+                
+                st.subheader("Score Distribution")
+                fig_hist = px.histogram(df_sorted, x='WPS', color='Category', color_discrete_map=category_colors, opacity=0.7)
+                fig_hist.update_layout(plot_bgcolor='white', paper_bgcolor='white')
+                st.plotly_chart(fig_hist, use_container_width=True)
 
 # --- FOOTER ---
 st.markdown("""
@@ -668,4 +841,3 @@ st.markdown("""
     <p style="font-size: 0.7em; text-transform: uppercase; letter-spacing: 1px; margin-top: 5px;">HSE Estates Infrastructure Intelligence</p>
 </div>
 """, unsafe_allow_html=True)
-
