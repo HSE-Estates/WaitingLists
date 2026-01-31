@@ -72,14 +72,6 @@ st.markdown("""
         border-right: 1px solid #e2e8f0;
     }
     
-    /* Custom Metric Styling */
-    [data-testid="stMetricValue"] {
-        color: #006858;
-        font-weight: 700;
-    }
-
-    /* NOTE: Custom slider CSS removed to revert to Streamlit default (Red) */
-
     /* Buttons (HSE Green) */
     .stButton > button {
         background-color: #006858;
@@ -134,6 +126,23 @@ st.markdown("""
     }
     .attribution-text { font-weight: 700; color: #006858; }
     
+    /* Metric Card */
+    .metric-card {
+        background-color: white;
+        padding: 20px;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        text-align: center;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    }
+    .metric-label { font-size: 0.85rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .metric-value { font-size: 2rem; color: #1e293b; font-weight: 800; margin: 10px 0; }
+    .metric-bar { height: 6px; width: 40%; margin: 0 auto; border-radius: 3px; }
+
     /* Report Styles */
     .report-container {
         background-color: white;
@@ -141,6 +150,13 @@ st.markdown("""
         border: 1px solid #e2e8f0;
         border-radius: 8px;
         margin-bottom: 20px;
+    }
+    .report-header {
+        border-bottom: 2px solid #006858;
+        padding-bottom: 20px;
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
     }
     .report-table {
         width: 100%;
@@ -160,13 +176,29 @@ st.markdown("""
         border-bottom: 1px solid #e2e8f0;
         color: #475569;
     }
+    
+    /* Print Specific Styles */
+    @media print {
+        [data-testid="stSidebar"], .hse-header, .footer, .stButton, button.print-btn, .stTabs {
+            display: none !important;
+        }
+        .stApp > header { display: none !important; }
+        .report-container {
+            border: none !important;
+            box-shadow: none !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        body { background-color: white; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- HEADER ---
 st.markdown("""
 <div class="hse-header">
-    <div style="max-width: 100%; margin: 0;"> <!-- Changed from fixed width/centered to full width/left -->
+    <div style="max-width: 100%; margin: 0;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
             <div style="display: flex; align-items: center; gap: 1rem;">
                 <div class="hse-logo-box">
@@ -220,7 +252,7 @@ DEFAULT_COLORS = {
     "P2": "#A6D6D0",  # Pale Green
     "P3": "#F472B6",  # Pink
     "P4": "#831B46",  # HSE Wine
-    "Total": "#2563EB"
+    "Total": "#2563EB" # Blue
 }
 
 # --- HELPERS ---
@@ -264,22 +296,15 @@ def calculate_extra_sessions(session_type, num_therapists, num_weeks):
 def generate_report_html(df_metrics, df_wps):
     """Generates report with date formatting"""
     table_rows = ""
-    for index, row in df_wps.head(15).iterrows():
-        # Clean date format for print
+    for index, row in df_wps.head(25).iterrows():
         date_str = row['Date'].strftime('%d-%m-%Y') if pd.notnull(row['Date']) else "N/A"
-        
-        table_rows += f"""
-        <tr>
-            <td>#{row['Rank']}</td>
-            <td>{row['Category']}</td>
-            <td>{date_str}</td>
-            <td>{row['Waiting_Days']} days</td>
-            <td><strong>{row['WPS']:.2f}</strong></td>
-        </tr>
-        """
+        table_rows += f"<tr><td>#{row['Rank']}</td><td>{row['Category']}</td><td>{date_str}</td><td>{row['Waiting_Days']} days</td><td><strong>{row['WPS']:.2f}</strong></td></tr>"
         
     html = f"""
     <div class="report-container">
+        <div style="text-align: right; margin-bottom: 20px;">
+            <button onclick="window.print()" class="print-btn" style="background-color: #006858; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold;">🖨️ Print to PDF / Printer</button>
+        </div>
         <div class="report-header">
             <div>
                 <h1 style="color: #006858; font-weight: 800; margin: 0;">Waiting List Strategy Report</h1>
@@ -357,14 +382,27 @@ def show_referral_charts(df, available_categories, category_colors):
             fig_bar = px.bar(filtered_referral_counts, x="Referral_From", y="Count", color="Category",
                              title="Referrals per Referrer", barmode="stack", opacity=0.9,
                              color_discrete_map=category_colors)
-            fig_bar.update_layout(plot_bgcolor='white', paper_bgcolor='white', font_family="Inter")
+            # Make charts prettier
+            fig_bar.update_layout(
+                plot_bgcolor='white', 
+                paper_bgcolor='white', 
+                font_family="Inter",
+                xaxis=dict(showgrid=False, linecolor='#e2e8f0'),
+                yaxis=dict(showgrid=True, gridcolor='#f1f5f9'),
+                margin=dict(t=40, l=20, r=20, b=20)
+            )
             st.plotly_chart(fig_bar, use_container_width=True)
 
         with col2:
             fig_sunburst = px.sunburst(filtered_referral_counts, path=["Referral_From", "Category"], values="Count",
                                        title="Referral Hierarchy", color="Category",
                                        color_discrete_map=category_colors)
-            fig_sunburst.update_layout(plot_bgcolor='white', paper_bgcolor='white', font_family="Inter")
+            fig_sunburst.update_layout(
+                plot_bgcolor='white', 
+                paper_bgcolor='white', 
+                font_family="Inter",
+                margin=dict(t=40, l=20, r=20, b=20)
+            )
             st.plotly_chart(fig_sunburst, use_container_width=True)
 
     # Sankey
@@ -375,7 +413,12 @@ def show_referral_charts(df, available_categories, category_colors):
     if "Referral_From" in df_sankey.columns:
         agg_df = df_sankey.groupby(['Referral_From', 'Category', 'Wait_Time_Category_Sankey']).size().reset_index(name='Count')
         all_nodes = sorted(list(pd.concat([agg_df['Referral_From'], agg_df['Category'], agg_df['Wait_Time_Category_Sankey']]).unique()))
-        echarts_nodes = [{"name": node} for node in all_nodes]
+        echarts_nodes = []
+        for node in all_nodes:
+            # Assign specific color to node if it exists in our palette, else grey
+            node_color = category_colors.get(node, "#94a3b8")
+            echarts_nodes.append({"name": node, "itemStyle": {"color": node_color}})
+
         echarts_links = []
         for _, row in agg_df.iterrows():
             echarts_links.append({"source": str(row['Referral_From']), "target": str(row['Category']), "value": row['Count']})
@@ -384,11 +427,15 @@ def show_referral_charts(df, available_categories, category_colors):
         option = {
             "tooltip": {"trigger": "item", "triggerOn": "mousemove"},
             "series": [{
-                "type": "sankey", "layout": "none", "data": echarts_nodes, "links": echarts_links,
+                "type": "sankey", 
+                "layout": "none", 
+                "data": echarts_nodes, 
+                "links": echarts_links,
                 "focusNodeAdjacency": "allEdges",
-                "itemStyle": {"borderWidth": 1, "borderColor": "#aaa"},
-                "lineStyle": {"color": "gradient", "curveness": 0.5},
-                "label": {"position": "right", "fontFamily": "Inter"}
+                "itemStyle": {"borderWidth": 0},
+                "lineStyle": {"color": "source", "curveness": 0.5, "opacity": 0.3}, # Pretty translucent flow lines
+                "label": {"position": "right", "fontFamily": "Inter", "color": "#1e293b", "fontSize": 12},
+                "nodeWidth": 25 # Thicker nodes for better visibility
             }]
         }
         st_echarts(option, height="500px")
@@ -579,24 +626,35 @@ if st.session_state.password_verified and st.session_state.df is not None:
             for p in sorted(df['Category'].unique()):
                 st.session_state.custom_priority_weights[p] = st.sidebar.slider(f"{p} Weight", 0, 100, st.session_state.custom_priority_weights.get(p, 50), 5)
 
-            # Metrics
+            # Metrics with Custom HTML Tiles
             backlog = {c: df[df["Category"] == c].shape[0] for c in cats}
             total_p = sum(backlog.values())
             
             st.markdown("### 🔄️ Current Status")
-            c_metrics = st.columns(len(cats) + 1)
-            c_metrics[0].metric("Total", total_p)
-            for i, c in enumerate(sorted(cats)):
-                c_metrics[i+1].metric(c, backlog.get(c, 0))
+            
+            # Create a clean list of tiles to display
+            tiles_to_show = [{"label": "Total", "count": total_p, "color": DEFAULT_COLORS["Total"]}]
+            for c in cats:
+                tiles_to_show.append({"label": c, "count": backlog.get(c, 0), "color": colors.get(c, "#94a3b8")})
+                
+            cols = st.columns(len(tiles_to_show))
+            for idx, tile in enumerate(tiles_to_show):
+                with cols[idx]:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">{tile['label']}</div>
+                        <div class="metric-value">{tile['count']}</div>
+                        <div class="metric-bar" style="background-color: {tile['color']};"></div>
+                    </div>
+                    """, unsafe_allow_html=True)
             
             st.markdown("---")
             
-            # Forecasting Placeholder (Mocked for speed if prophet fails or simplifies)
+            # Forecasting Placeholder
             @st.cache_data
             def simple_forecast(data, weeks, categories):
                 res = {}
                 for c in categories:
-                    # Just mean for now to ensure stability
                     mean_val = 5 # Dummy default
                     dates = pd.date_range(start=datetime.today(), periods=weeks, freq='W')
                     res[c] = pd.DataFrame({'ds': dates, 'yhat': [mean_val]*weeks})
@@ -631,10 +689,20 @@ if st.session_state.password_verified and st.session_state.df is not None:
             fig = go.Figure()
             for c in cats:
                 fig.add_trace(go.Scatter(x=weeks_arr, y=proj[c], mode='lines+markers', name=c, line=dict(color=colors.get(c, "#888"))))
-            fig.update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0), plot_bgcolor='white', paper_bgcolor='white', font_family="Inter")
+            # Pretty Chart Styling
+            fig.update_layout(
+                height=400, 
+                margin=dict(l=20,r=20,t=40,b=20), 
+                plot_bgcolor='white', 
+                paper_bgcolor='white', 
+                font_family="Inter",
+                xaxis=dict(showgrid=False, linecolor='#e2e8f0'),
+                yaxis=dict(showgrid=True, gridcolor='#f1f5f9'),
+                hovermode="x unified"
+            )
             st.plotly_chart(fig, use_container_width=True)
 
-            # Extra Capacity Calculation (Explicitly displayed)
+            # Extra Capacity Calculation
             _, _, extra_weekly_cap = calculate_extra_sessions(session_len, num_therapists, num_weeks)
             
             m1, m2, m3 = st.columns(3)
@@ -669,7 +737,14 @@ if st.session_state.password_verified and st.session_state.df is not None:
                 st.download_button("📥 Download CSV", csv, "list.csv", "text/csv")
                 
                 fig_hist = px.histogram(df_sorted, x='WPS', color='Category', color_discrete_map=colors, opacity=0.8)
-                fig_hist.update_layout(plot_bgcolor='white', paper_bgcolor='white', font_family="Inter")
+                fig_hist.update_layout(
+                    plot_bgcolor='white', 
+                    paper_bgcolor='white', 
+                    font_family="Inter",
+                    xaxis=dict(showgrid=False, linecolor='#e2e8f0'),
+                    yaxis=dict(showgrid=True, gridcolor='#f1f5f9'),
+                    margin=dict(t=40, l=20, r=20, b=20)
+                )
                 st.plotly_chart(fig_hist, use_container_width=True)
 
 # --- FOOTER ---
