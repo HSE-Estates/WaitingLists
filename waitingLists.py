@@ -78,24 +78,7 @@ st.markdown("""
         font-weight: 700;
     }
 
-    /* HSE Styled Sliders - CLEANER IMPLEMENTATION */
-    /* Track color */
-    div[data-baseweb="slider"] div[class*="st-"] {
-        background-color: #cbd5e1;
-    }
-    /* Filled track color */
-    div[data-baseweb="slider"] div[class*="st-"] div[class*="st-"] {
-        background-color: #006858 !important;
-    }
-    /* Thumb/Handle color */
-    div[data-baseweb="slider"] div[role="slider"] {
-        background-color: #006858 !important;
-        border-color: #006858 !important;
-    }
-    /* Focus ring */
-    div[data-baseweb="slider"] div[role="slider"]:focus {
-        box-shadow: 0 0 0 3px rgba(0, 104, 88, 0.3) !important;
-    }
+    /* NOTE: Custom slider CSS removed to revert to Streamlit default (Red) */
 
     /* Buttons (HSE Green) */
     .stButton > button {
@@ -183,7 +166,7 @@ st.markdown("""
 # --- HEADER ---
 st.markdown("""
 <div class="hse-header">
-    <div style="max-width: 80rem; margin: 0 auto;">
+    <div style="max-width: 100%; margin: 0;"> <!-- Changed from fixed width/centered to full width/left -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
             <div style="display: flex; align-items: center; gap: 1rem;">
                 <div class="hse-logo-box">
@@ -199,20 +182,13 @@ st.markdown("""
                 <p style="font-size: 0.875rem; font-weight: 600; margin: 0; color: white;">Dave Maher</p>
             </div>
         </div>
-        <div style="max-width: 42rem;">
+        <div style="width: 100%;">
             <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 1rem;">
-                <div style="background: rgba(255,255,255,0.15); width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(5px);">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                        <polyline points="14 2 14 8 20 8"></polyline>
-                        <line x1="16" y1="13" x2="8" y2="13"></line>
-                        <line x1="16" y1="17" x2="8" y2="17"></line>
-                        <polyline points="10 9 9 9 8 9"></polyline>
-                    </svg>
-                </div>
-                <h2 style="font-size: 2.5rem; font-weight: 900; line-height: 1.2; margin: 0; color: white;">Waiting List Strategist</h2>
+                <img src="https://pbs.twimg.com/profile_images/1676505270028058625/J0aWYb1S_400x400.jpg" 
+                     style="width: 70px; height: 70px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.3); object-fit: cover;">
+                <h2 style="font-size: 2.5rem; font-weight: 900; line-height: 1.2; margin: 0; color: white; text-align: left;">Waiting List Strategist</h2>
             </div>
-            <p style="color: rgba(236, 253, 245, 0.9); font-size: 1.125rem; line-height: 1.6;">
+            <p style="color: rgba(236, 253, 245, 0.9); font-size: 1.125rem; line-height: 1.6; text-align: left; max-width: 50rem;">
                 Strategic command centre using 'Prophet' AI to forecast patient influx, simulate staffing scenarios, and re-rank priorities.
             </p>
         </div>
