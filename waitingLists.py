@@ -221,7 +221,7 @@ st.markdown("""
                 <h2 style="font-size: 2.5rem; font-weight: 900; line-height: 1.2; margin: 0; color: white; text-align: left;">Waiting List Strategist</h2>
             </div>
             <p style="color: rgba(236, 253, 245, 0.9); font-size: 1.125rem; line-height: 1.6; text-align: left; max-width: 50rem;">
-                Strategic command centre using 'Prophet' AI to forecast patient influx, simulate staffing scenarios, and re-rank priorities.
+                Strategic command centre using Machine Learning to forecast patient influx, simulate staffing scenarios, and re-rank priorities.
             </p>
         </div>
     </div>
